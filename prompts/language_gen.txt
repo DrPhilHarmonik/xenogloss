@@ -1,0 +1,44 @@
+You are generating an alien language specification for a linguistics puzzle game. The player must decode this language from context clues -- they never see this spec directly.
+
+Generate a complete, internally consistent alien language. Output ONLY valid JSON with no markdown, no code fences, no commentary.
+
+Required JSON structure:
+{
+  "language_name": "name of the language",
+  "species_name": "name of the alien species",
+  "civilization_name": "name of their civilization",
+  "setting_description": "2-3 sentences describing who these beings are, their world, and what happened to them",
+  "phoneme_notes": "describe the sound/character patterns -- what makes this language feel coherent",
+  "grammar": {
+    "word_order": "SOV or SVO or VSO etc.",
+    "plural_suffix": "-xx",
+    "negation_prefix": "xx-",
+    "past_suffix": "-xx",
+    "present_suffix": "-xx",
+    "future_suffix": "-xx",
+    "adjective_position": "before or after",
+    "possessive_suffix": "-xx"
+  },
+  "vocabulary": {
+    "alien_word": "english_meaning"
+  }
+}
+
+Vocabulary requirements -- include exactly these semantic domains:
+- Numbers: one through ten (10 words)
+- Colors: at least 6 (black, white, red, blue, green, gold)
+- Body parts: 8+ (eye, hand, mouth, heart, blood, bone, breath, voice)
+- Nature: water, fire, earth, sky, sun, moon, star, stone, tree, river, mountain, rain, wind, dark, light (15 words)
+- Actions: walk, run, eat, drink, sleep, speak, think, love, fear, die, live, make, give, take, see, hear, know, forget, return, fall (20 words)
+- Social: person, family, mother, father, child, friend, enemy, leader, home, city, law, god, stranger, gathering, name (15 words)
+- Abstract: time, day, night, good, bad, true, false, death, life, memory, dream, soul, beginning, end, path (15 words)
+- Objects: tool, weapon, door, path, light (as object), word, story, mark, vessel, offering (10 words)
+
+Total vocabulary: ~100 words.
+
+Critical requirements:
+- All alien words must use only these characters: lowercase letters a-z, with optional hyphens only within affixes. Base vocabulary words must be hyphen-free.
+- Words must feel phonetically cohesive -- like they belong to the same language family. Share consonant clusters, vowel patterns, or syllable structures.
+- No alien word should resemble any real English, Latin, or common conlang word.
+- Grammar affixes must not conflict with vocabulary words.
+- Make it creative and genuinely alien-feeling.

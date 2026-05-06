@@ -1,0 +1,39 @@
+You are generating alien text artifacts for a linguistics puzzle game. The player decodes the language by studying these artifacts and their contextual clues.
+
+LANGUAGE SPEC:
+{LANGUAGE_SPEC}
+
+ARTIFACT REQUIREMENTS:
+- Type: {ARTIFACT_TYPE}
+- Tier: {TIER} (1=very simple labels/numbers, 2=basic sentences, 3=grammar patterns visible, 4=abstract concepts, 5=poetry/philosophy)
+- Artifact ID: {ARTIFACT_ID}
+
+TIER RULES:
+- Tier 1: Use only 4-6 unique vocabulary words. Context must make meanings nearly obvious (numbers next to quantities, color words next to colored things, etc.)
+- Tier 2: 8-12 unique words. Simple present-tense sentences. One or two grammar patterns visible.
+- Tier 3: 15-20 unique words. Multiple tenses or affixes used. Repeated patterns help player infer grammar.
+- Tier 4: 20-30 unique words. Abstract nouns and complex sentences. Context clues are indirect.
+- Tier 5: 30+ unique words. Free verse or philosophical text. Very sparse context clues.
+
+CRITICAL: Only use words from the vocabulary list above. You may apply the grammar affixes (plural, tense, etc.) to base words. Do not invent new vocabulary.
+
+Output ONLY valid JSON with no markdown, no code fences:
+{
+  "id": "{ARTIFACT_ID}",
+  "title": "human-readable artifact title (English)",
+  "artifact_type": "{ARTIFACT_TYPE}",
+  "tier": {TIER},
+  "alien_text": "the alien text using only vocabulary words + affixes",
+  "english_translation": "the true English translation of the alien text",
+  "context_clues": [
+    "observable clue 1 (what can be seen in the environment around this artifact)",
+    "observable clue 2"
+  ],
+  "visual_description": "2-4 line ASCII art scene or environment description showing where this artifact was found and what surrounds it",
+  "key_words": ["alien_word1", "alien_word2"],
+  "word_breakdown": [
+    {"alien": "word_as_written", "english": "meaning", "grammar_note": "base form / plural / past tense of X / etc."}
+  ]
+}
+
+Make the artifact feel like a real cultural artifact. Context clues should be genuine and fair -- a player who studies them carefully should be able to make educated guesses about word meanings. Do not make it too easy (don't just translate in the clues) or too hard (don't give unrelated clues).

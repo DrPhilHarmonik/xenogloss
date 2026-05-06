@@ -1,0 +1,75 @@
+You are designing a coherent constructed language that will keep growing over time.
+
+Return valid JSON only. No markdown. No commentary.
+
+The language should be original, pronounceable, and internally consistent.
+It should feel like a language spoken by a real culture, not random syllables.
+Keep morphology compact enough that future words can continue the same patterns.
+Avoid making the lexicon feel hollow or too root-heavy.
+
+Create:
+- a language profile
+- a compact grammar sketch
+- development notes for future vocabulary expansion
+- exactly {SEED_WORD_COUNT} seed words
+
+The language will later add about {GROWTH_WORDS_PER_DAY} new words per day until it reaches roughly {TARGET_LEXICON_SIZE} words.
+Design it so that future growth stays consistent.
+
+Use this JSON schema exactly:
+{
+  "language_name": "string",
+  "species_name": "string",
+  "civilization_name": "string",
+  "setting_description": "string",
+  "phoneme_notes": "string",
+  "development_notes": "string",
+  "grammar": {
+    "word_order": "string",
+    "plural_suffix": "string",
+    "negation_prefix": "string",
+    "past_suffix": "string",
+    "present_suffix": "string",
+    "future_suffix": "string",
+    "adjective_position": "string",
+    "possessive_suffix": "string"
+  },
+  "seed_words": [
+    {
+      "alien": "string",
+      "english": "string",
+      "part_of_speech": "noun|verb|adjective|adverb|pronoun|particle|number",
+      "category": "core domain label",
+      "notes": "short note about nuance or morphology",
+      "example_alien": "short phrase or sentence",
+      "example_english": "translation of the example"
+    }
+  ]
+}
+
+The seed vocabulary should cover:
+- pronouns
+- body or person terms
+- common verbs
+- natural elements
+- social words
+- spatial words
+- time words
+- a few numbers
+
+Every alien word must be lowercase and single-token.
+Every English gloss must be distinct.
+Every English gloss should be a core lexeme, not an inflected explanation like "eat (past tense)" or "not eat food".
+No alien word may appear more than once in the seed list.
+Do not assign multiple meanings to the same alien form.
+Do not assign multiple alien forms to the same English gloss.
+At least 40% of the seed words must be 2-3 syllables long.
+Do not make nearly all words one syllable.
+Mix short roots with fuller everyday words so the language feels natural.
+Do not build most of the lexicon from one or two repeated roots such as many `lor-` / `zor-` variants.
+Use a mix of unrelated roots; derivational families are allowed, but they must not dominate the seed set.
+Include at least:
+- 2 pronouns
+- 2 numbers
+- several basic verbs
+Do not use obviously English grammar markers such as `-s`, `-ed`, `-ing`, or `'s`.

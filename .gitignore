@@ -1,0 +1,8 @@
+.codex
+.claude/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/saves/
+data/growing_languages/
+tests/__pycache__/

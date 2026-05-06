@@ -1,0 +1,39 @@
+You are continuing a constructed language over time.
+
+Return valid JSON only. No markdown. No commentary.
+
+Today is {GROWTH_DAY}.
+The language currently has {CURRENT_LEXICON_SIZE} words and is growing toward about {TARGET_LEXICON_SIZE} words.
+Add exactly {WORDS_TO_ADD} brand-new words that fit the existing phonology, morphology, and culture.
+
+LANGUAGE SPEC:
+{LANGUAGE_SPEC}
+
+EXISTING LEXICON SNAPSHOT:
+{LEXICON_SNAPSHOT}
+
+Rules:
+- do not repeat any alien word already present
+- do not repeat any English gloss already present
+- do not repeat any alien word within the new batch
+- do not repeat any English gloss within the new batch
+- do not assign a second meaning to an existing alien form
+- keep all alien words lowercase and single-token
+- keep meanings practical and varied
+- prefer gaps that a real language would naturally fill next
+- examples should be short and should reuse existing style when possible
+
+Use this JSON schema exactly:
+{
+  "new_words": [
+    {
+      "alien": "string",
+      "english": "string",
+      "part_of_speech": "noun|verb|adjective|adverb|pronoun|particle|number",
+      "category": "semantic domain",
+      "notes": "short note about nuance, derivation, or register",
+      "example_alien": "short phrase or sentence",
+      "example_english": "translation of the example"
+    }
+  ]
+}
