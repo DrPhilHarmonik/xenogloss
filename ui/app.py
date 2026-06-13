@@ -154,8 +154,11 @@ class CodexPanel(ScrollableContainer):
         yield Label("No entries yet.", id="codex-empty")
         yield Label("", id="coverage-info")
 
-    def update(self, campaign: Campaign):
-        entries = campaign.codex.to_list()
+    def update(self, campaign: Campaign, sort_by: str = "alpha"):
+        artifact_tiers = {a.id: a.tier for a in campaign.artifacts.artifacts}
+        entries = campaign.codex.sorted_entries(sort_by, artifact_tiers)
+        freq = campaign.artifacts.word_frequency()
+
         empty_label = self.query_one("#codex-empty", Label)
         entries_widget = self.query_one("#codex-entries", Static)
 
@@ -171,7 +174,12 @@ class CodexPanel(ScrollableContainer):
                 text.append(f" = {e['player_guess']}")
                 badge = {"certain": " [C]", "probable": " [P]", "guessing": " [?]"}[e["confidence"]]
                 text.append(badge, style=f"dim {color}")
+                count = freq.get(e["alien_word"], 0)
+                if count > 1:
+                    text.append(f"  ×{count}", style="dim")
                 text.append("\n")
+                if e.get("notes"):
+                    text.append(f"  ↳ {e['notes']}\n", style="dim italic")
             entries_widget.update(text)
 
         artifact = campaign.current_artifact
@@ -180,7 +188,7 @@ class CodexPanel(ScrollableContainer):
             pct = int(known / total * 100) if total else 0
             self.query_one("#coverage-info", Label).update(
                 f"This artifact: {known}/{total} words known ({pct}%)\n"
-                f"Total codex: {len(entries)} words"
+                f"Total codex: {len(entries)} words  |  sorted: {sort_by}"
             )
 
 
@@ -252,19 +260,25 @@ HELP_TEXT = """\
   As your codex grows, new artifacts unlock. The message bar shows your coverage.
 
 [bold]COMMANDS[/bold]
-  [cyan]:next[/cyan]  [cyan]:prev[/cyan]          Navigate between unlocked artifacts
-  [cyan]:list[/cyan]             Show all artifacts and unlock progress
-  [cyan]:find word[/cyan]        Show which artifacts contain a word
-  [cyan]:search meaning[/cyan]   Search the codex by English meaning
-  [cyan]:hint word[/cyan]        Ask LEXIS (AI) for a vague clue about a word
-  [cyan]:forget word[/cyan]      Remove a wrong guess from your codex
-  [cyan]:translate text[/cyan]   Record your full translation attempt for this artifact
-  [cyan]:mytranslation[/cyan]    Show your recorded translation for this artifact
-  [cyan]:check[/cyan]            Compare your translation to the actual (spoiler)
-  [cyan]:reveal[/cyan]           Show all translations when every artifact is solved
-  [cyan]:grammar[/cyan]          Show grammar rules (word order, suffixes, etc.)
-  [cyan]:info[/cyan]             Show civilization background lore
-  [cyan]:help[/cyan]             Show this message
+  [cyan]:next[/cyan]  [cyan]:prev[/cyan]               Navigate between unlocked artifacts
+  [cyan]:list[/cyan]                  Show all artifacts and unlock progress
+  [cyan]:find word[/cyan]             Show which artifacts contain a word
+  [cyan]:search meaning[/cyan]        Search the codex by English meaning
+  [cyan]:note word your note[/cyan]   Attach a note to a codex entry (shown below it)
+  [cyan]:note word[/cyan]             Show the current note for a codex entry
+  [cyan]:codex[/cyan]                 Show codex sorted by current mode
+  [cyan]:codex alpha[/cyan]           Sort codex alphabetically (default)
+  [cyan]:codex confidence[/cyan]      Sort codex by confidence (certain first)
+  [cyan]:codex artifact[/cyan]        Sort codex by first-seen artifact tier
+  [cyan]:hint word[/cyan]             Ask LEXIS (AI) for a vague clue about a word
+  [cyan]:forget word[/cyan]           Remove a wrong guess from your codex
+  [cyan]:translate text[/cyan]        Record your full translation attempt for this artifact
+  [cyan]:mytranslation[/cyan]         Show your recorded translation for this artifact
+  [cyan]:check[/cyan]                 Compare your translation to the actual (spoiler)
+  [cyan]:reveal[/cyan]                Show all translations when every artifact is solved
+  [cyan]:grammar[/cyan]               Show grammar rules (word order, suffixes, etc.)
+  [cyan]:info[/cyan]                  Show civilization background lore
+  [cyan]:help[/cyan]                  Show this message
 """
 
 
@@ -305,6 +319,7 @@ class XenoglossApp(App):
         super().__init__(**kwargs)
         self.campaign: Optional[Campaign] = existing_campaign
         self._hint_in_progress: bool = False
+        self._codex_sort: str = "alpha"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -375,7 +390,7 @@ class XenoglossApp(App):
         if self.campaign is None:
             return
         self.query_one(ArtifactPanel).update(self.campaign)
-        self.query_one(CodexPanel).update(self.campaign)
+        self.query_one(CodexPanel).update(self.campaign, self._codex_sort)
 
     def _show_message(self, msg: str):
         self.query_one("#message-bar", Static).update(msg)
@@ -425,6 +440,10 @@ class XenoglossApp(App):
             self._handle_find(arg)
         elif verb == "search":
             self._handle_search(arg)
+        elif verb == "note":
+            self._handle_note(arg)
+        elif verb == "codex":
+            self._handle_codex_sort(arg)
         elif verb == "grammar":
             self._show_message(self.campaign.language.grammar_summary())
         elif verb == "info":
@@ -543,6 +562,42 @@ class XenoglossApp(App):
                 f"  [{color}]{entry.alien_word}[/{color}] = {entry.player_guess}  [{entry.confidence}]{origin}"
             )
         self._show_message("\n".join(lines))
+
+    def _handle_note(self, arg: str):
+        parts = arg.strip().split(None, 1)
+        if not parts:
+            self._show_message("Usage: :note alien_word your note here")
+            return
+        word = parts[0].lower()
+        if word not in self.campaign.codex.entries:
+            self._show_message(f"'{word}' is not in your codex yet.")
+            return
+        if len(parts) == 1:
+            # Show existing note
+            entry = self.campaign.codex.get(word)
+            if entry.notes:
+                self._show_message(f"Note for [bold]{word}[/bold]: {entry.notes}")
+            else:
+                self._show_message(f"No note for '{word}'. Use :note {word} your text here to add one.")
+            return
+        notes_text = parts[1]
+        self.campaign.codex.update_notes(word, notes_text)
+        self.campaign.save()
+        self._refresh_panels()
+        self._show_message(f"Note saved for [bold]{word}[/bold]: {notes_text}")
+
+    def _handle_codex_sort(self, arg: str):
+        sort = arg.strip().lower()
+        valid = ("alpha", "confidence", "artifact")
+        if sort not in valid:
+            if sort:
+                self._show_message(f"Unknown sort: '{sort}'. Options: alpha, confidence, artifact")
+            else:
+                self._show_message(f"Codex sort: [bold]{self._codex_sort}[/bold]  |  Options: alpha, confidence, artifact")
+            return
+        self._codex_sort = sort
+        self._refresh_panels()
+        self._show_message(f"Codex sorted by: [bold]{sort}[/bold]")
 
     def _handle_translate(self, text: str):
         artifact = self.campaign.current_artifact

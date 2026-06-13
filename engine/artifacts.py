@@ -105,6 +105,14 @@ class ArtifactCollection:
     def unlocked(self) -> list[Artifact]:
         return [a for a in self.artifacts if a.unlocked]
 
+    def word_frequency(self) -> dict[str, int]:
+        """Count how many artifacts each alien word appears in (across all artifacts)."""
+        freq: dict[str, int] = {}
+        for artifact in self.artifacts:
+            for word in artifact.unique_words():
+                freq[word] = freq.get(word, 0) + 1
+        return freq
+
     def find_by_word(self, alien_word: str, unlocked_only: bool = False) -> list[Artifact]:
         """Return artifacts whose alien text contains the given word."""
         needle = strip_punctuation(alien_word).lower().strip()

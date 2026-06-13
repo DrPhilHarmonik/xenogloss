@@ -3,6 +3,7 @@ from typing import Optional
 
 
 CONFIDENCE_LEVELS = ("guessing", "probable", "certain")
+_CONFIDENCE_RANK = {"certain": 0, "probable": 1, "guessing": 2}
 _STRIP_CHARS = ".,!?;:\"'()[]"
 
 
@@ -67,6 +68,14 @@ class Codex:
     def remove(self, alien_word: str):
         self.entries.pop(alien_word.lower().strip(), None)
 
+    def update_notes(self, alien_word: str, notes: str) -> bool:
+        """Set notes on an existing entry. Returns False if the word isn't in the codex."""
+        entry = self.get(alien_word)
+        if entry is None:
+            return False
+        entry.notes = notes.strip()
+        return True
+
     def known_words(self) -> set[str]:
         return set(self.entries.keys())
 
@@ -88,8 +97,20 @@ class Codex:
             if needle in entry.player_guess.lower()
         ]
 
+    def sorted_entries(self, sort_by: str = "alpha", artifact_tiers: dict[str, int] | None = None) -> list[dict]:
+        """Return codex entries as dicts sorted by sort_by: 'alpha', 'confidence', or 'artifact'."""
+        entries = list(self.entries.values())
+        if sort_by == "confidence":
+            entries.sort(key=lambda e: (_CONFIDENCE_RANK.get(e.confidence, 2), e.alien_word))
+        elif sort_by == "artifact":
+            tiers = artifact_tiers or {}
+            entries.sort(key=lambda e: (tiers.get(e.first_seen_in, 99), e.alien_word))
+        else:
+            entries.sort(key=lambda e: e.alien_word)
+        return [e.to_dict() for e in entries]
+
     def to_list(self) -> list[dict]:
-        return [e.to_dict() for e in sorted(self.entries.values(), key=lambda e: e.alien_word)]
+        return self.sorted_entries("alpha")
 
     @classmethod
     def from_list(cls, data: list[dict]) -> "Codex":
