@@ -5,6 +5,7 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
+from engine.artifact_smith import ArtifactSmith, generate_artifacts
 from engine.growth_generator import days_to_target, generate_daily_growth, generate_seed_language, seed_archetype_names
 from engine.growth_language import GrowingLanguage
 
@@ -127,6 +128,43 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_artifacts(args: argparse.Namespace) -> int:
+    language = GrowingLanguage.load(args.id)
+    smith = ArtifactSmith(language, seed=args.seed)
+    if not smith.can_compose():
+        print(f"{language.language_name} has no usable words yet -- grow it first.")
+        return 1
+
+    if args.tier:
+        artifacts = []
+        for _ in range(args.count):
+            artifact = smith.make(tier=args.tier)
+            if artifact is not None:
+                artifacts.append(artifact)
+    else:
+        artifacts = generate_artifacts(language, {1: args.count, 2: max(1, args.count // 2)}, seed=args.seed)
+
+    if not artifacts:
+        print("Could not compose any artifacts from the current lexicon.")
+        return 1
+
+    if args.json:
+        print(json.dumps([a.to_dict() for a in artifacts], indent=2))
+        return 0
+
+    print(f"{language.language_name} [{language.language_id}] -- {len(artifacts)} procedural artifact(s)\n")
+    for artifact in artifacts:
+        print(f"  [{artifact.artifact_type}] tier {artifact.tier}  {artifact.title}")
+        print(f"    {artifact.alien_text}")
+        print(f"    = {artifact.english_translation}")
+        parts = []
+        for wb in artifact.word_breakdown:
+            parts.append(f"{wb.alien}={wb.english}" + (f" ({wb.grammar_note})" if wb.grammar_note else ""))
+        print(f"    glosses: {'  '.join(parts)}")
+        print()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Grow a conlang over time using Ollama.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -157,6 +195,15 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--id", required=True)
     export_parser.add_argument("--output")
     export_parser.set_defaults(func=cmd_export)
+
+    artifacts_parser = subparsers.add_parser(
+        "artifacts", help="Compose procedural artifacts from a language (offline, no LLM).")
+    artifacts_parser.add_argument("--id", required=True)
+    artifacts_parser.add_argument("--count", type=int, default=4, help="artifacts to compose")
+    artifacts_parser.add_argument("--tier", type=int, help="fix all artifacts to this tier (1-5)")
+    artifacts_parser.add_argument("--seed", type=int, help="seed for reproducible composition")
+    artifacts_parser.add_argument("--json", action="store_true", help="emit artifacts as JSON")
+    artifacts_parser.set_defaults(func=cmd_artifacts)
 
     return parser
 

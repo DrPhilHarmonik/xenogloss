@@ -43,11 +43,29 @@ Show how many artifacts a word appears in. High-frequency words are worth decodi
 
 ## Phase 4 -- Content Generation
 
+### Procedural artifact composition (done)
+`engine/artifact_smith.py` composes artifacts directly from a `GrowingLanguage`'s
+own lexicon and grammar instead of asking an LLM to invent text. Consistency is
+structural, not hoped-for: every alien word is a real lexicon entry, and every
+sentence obeys the language's word order and morphology (plural / tense /
+possessive suffixes, negation prefix, adjective position). The English
+translation and per-word breakdown are exact because each sentence is built from
+known glosses. It runs offline with no model, and is reproducible from a `--seed`.
+CLI: `python grow_language.py artifacts --id <lang> [--tier N] [--count N] [--seed N] [--json]`.
+This also dissolves the "generation takes time" problem below for the procedural
+path -- composition is instant, so background prefetch and `:more` are effectively
+free; the Ollama generator remains available for richer, free-form flavor text.
+
 ### Background artifact generation
-Tier 3/4/5 artifacts take time to generate. Start generating them in a background thread immediately after the initial campaign loads, so they're ready when the player unlocks them instead of forcing a wait mid-game.
+Tier 3/4/5 artifacts from the *LLM* generator take time to produce. Start
+generating those in a background thread immediately after the initial campaign
+loads, so they're ready when the player unlocks them. (Procedural artifacts need
+no prefetch.)
 
 ### On-demand generation (`:more`)
-Let the player request an additional artifact at their current highest unlocked tier. Useful if they're stuck and want more context for specific words.
+Let the player request an additional artifact at their current highest unlocked
+tier. With the procedural smith this is instant and offline; useful if they're
+stuck and want more context for specific words.
 
 ### Lore deepening
 As codex grows, LEXIS can offer civilization fragments beyond word hints -- short recovered texts, historical notes, population records. Rewards sustained play with narrative payoff.
