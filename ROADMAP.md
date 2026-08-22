@@ -72,15 +72,36 @@ As codex grows, LEXIS can offer civilization fragments beyond word hints -- shor
 
 ---
 
-## Phase 5 -- Grammar Discovery
+## Phase 5 -- Grammar Discovery (done)
 
-Right now `:grammar` hands the player the full grammar spec immediately. Making it discoverable would add a puzzle layer.
+`:grammar` no longer hands over the spec. `engine/grammar_discovery.py` scores
+every rule against the evidence the player actually holds.
 
-### Progressive grammar panel
-Grammar panel starts blank. Rules fill in as the player identifies patterns. Logic: once 3+ words with the same suffix are in the codex and their base forms are known, infer the rule and surface it. Requires matching `word_breakdown` grammar notes to codex entries.
+### Progressive grammar panel (done)
+Affix rules (plural, three tenses, possessive, negation) resolve on **minimal
+pairs**: a base word and its inflected form both sitting in the codex. Three
+pairs and the rule surfaces, with the pairs shown as its provenance. Where the
+artifacts carry a `word_breakdown`, only pairs the breakdown attests are
+counted, so a coincidental rhyme cannot unlock a rule the language never used;
+campaigns whose artifacts carry no notes fall back to plain surface matching so
+the rule stays reachable. Categories the language does not mark at all are
+labelled as such rather than dangling forever.
 
-### Grammar hints from LEXIS
-`:hint` on a suffix or pattern (e.g., `:hint -or`) could give a grammar hint instead of a vocabulary hint.
+Syntax rules (word order, adjective position) resolve on a different gate:
+two unlocked texts of three or more words that the player has glossed end to
+end -- which is what reading order off a text actually requires. Undiscovered
+rules render as `???` with a progress counter.
+
+Discovery is derived from codex + artifacts, so old saves need no migration;
+the campaign persists only *which* rules have already fired, so `:forget`
+cannot un-teach something LEXIS has announced. New rules are announced in the
+message bar the moment the entry that resolves them lands.
+
+### Grammar hints from LEXIS (done)
+`:hint -or` / `:hint na-` route to an offline hinter instead of Ollama. It
+names codex words carrying the affix whose plain form is still unlogged, or
+counts how many more pairs are needed -- never the rule itself. An affix that
+belongs to no rule is dismissed as part of the word.
 
 ---
 

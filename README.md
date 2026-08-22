@@ -69,12 +69,13 @@ All commands start with `:`.
 | `:find word` | Show which artifacts contain a specific alien word |
 | `:search meaning` | Search your codex by guessed English meaning |
 | `:hint word` | Ask LEXIS (AI) for a vague, in-character clue about a specific word |
+| `:hint -suffix` | Ask LEXIS about a recurring affix (`:hint -or`, `:hint na-`) instead of a word |
 | `:forget word` | Remove a word from your codex |
 | `:translate your text here` | Record your full translation attempt for the current artifact |
 | `:mytranslation` | Show your recorded translation for the current artifact |
 | `:check` | Compare your translation to the actual translation (spoiler) |
 | `:reveal` | Show all translations once every artifact is solved |
-| `:grammar` | Show the grammar rules (word order, tense suffixes, plural, etc.) |
+| `:grammar` | Show the grammar you have reconstructed so far, and how close the rest is |
 | `:info` | Show civilization background lore |
 | `:help` | Show in-game help |
 
@@ -84,7 +85,16 @@ All commands start with `:`.
 
 **Start with the obvious.** Tier 1 artifacts are designed to be solvable: a number sequence next to quantities, a color word next to a colored object, a label on a door. Look at the context clues and ask "what category of word would make sense here?"
 
-**Use `:grammar` early.** The grammar rules panel shows you things like the plural suffix and tense markers. If you see the same ending on multiple words, it's probably grammatical -- the root word is what matters for the codex.
+**Grammar is discovered, not given.** `:grammar` starts almost blank. A suffix rule
+resolves once your codex holds three **minimal pairs** -- a word and its inflected
+form, like `nur` alongside `nurn`. Word order and adjective position resolve once
+you have glossed two whole texts end to end. Until then the panel shows `???` and a
+progress counter, so it tells you what to go looking for. If you see the same ending
+on several words, log the plain form too: that is what turns a hunch into a rule.
+
+**`:hint -suffix` asks about a pattern.** `:hint -or` or `:hint na-` skips the AI and
+answers from your own records -- naming words that carry the affix whose plain form
+you have not logged yet. It never states the rule; it points at the evidence.
 
 **`:hint word` is your friend.** LEXIS is an in-character damaged translation AI that gives deliberately vague clues. It won't tell you the answer, but it can nudge you in the right direction. Use it when you're stuck on a specific word.
 

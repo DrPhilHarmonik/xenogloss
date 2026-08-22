@@ -14,6 +14,7 @@ from textual.widgets import Footer, Header, Input, Label, LoadingIndicator, Rich
 from engine.campaign import Campaign
 from engine.codex import CONFIDENCE_COLORS, CONFIDENCE_LEVELS, strip_punctuation
 from engine.generator import generate_hint, generate_initial_campaign
+from engine import grammar_discovery
 
 
 # ---------------------------------------------------------------------------
@@ -271,12 +272,13 @@ HELP_TEXT = """\
   [cyan]:codex confidence[/cyan]      Sort codex by confidence (certain first)
   [cyan]:codex artifact[/cyan]        Sort codex by first-seen artifact tier
   [cyan]:hint word[/cyan]             Ask LEXIS (AI) for a vague clue about a word
+  [cyan]:hint -suffix[/cyan]          Ask LEXIS about a recurring affix instead of a word
   [cyan]:forget word[/cyan]           Remove a wrong guess from your codex
   [cyan]:translate text[/cyan]        Record your full translation attempt for this artifact
   [cyan]:mytranslation[/cyan]         Show your recorded translation for this artifact
   [cyan]:check[/cyan]                 Compare your translation to the actual (spoiler)
   [cyan]:reveal[/cyan]                Show all translations when every artifact is solved
-  [cyan]:grammar[/cyan]               Show grammar rules (word order, suffixes, etc.)
+  [cyan]:grammar[/cyan]               Show the grammar you have reconstructed so far
   [cyan]:info[/cyan]                  Show civilization background lore
   [cyan]:help[/cyan]                  Show this message
 """
@@ -445,7 +447,7 @@ class XenoglossApp(App):
         elif verb == "codex":
             self._handle_codex_sort(arg)
         elif verb == "grammar":
-            self._show_message(self.campaign.language.grammar_summary())
+            self._handle_grammar()
         elif verb == "info":
             lang = self.campaign.language
             self._show_message(
@@ -481,6 +483,7 @@ class XenoglossApp(App):
         artifact_id = artifact.id if artifact else ""
         self.campaign.codex.add(alien_word, meaning, confidence, artifact_id)
         self.campaign.on_codex_update()
+        discovery_note = self._announce_grammar_discoveries()
         self.campaign.save()
         self._refresh_panels()
         color = CONFIDENCE_COLORS[confidence]
@@ -491,6 +494,7 @@ class XenoglossApp(App):
             if warning:
                 msg += f"\n{warning}"
 
+        msg += discovery_note
         self._show_message(msg)
 
     def _handle_list(self):
@@ -693,6 +697,22 @@ class XenoglossApp(App):
                 "Use [cyan]:reveal[/cyan] to see the full translation record."
             )
 
+    def _handle_grammar(self):
+        rows = self.campaign.grammar_progress()
+        self._show_message(grammar_discovery.render_panel(rows))
+
+    def _announce_grammar_discoveries(self):
+        """Tell the player about any rule their latest entry just resolved."""
+        newly = self.campaign.refresh_grammar_discovery()
+        if not newly:
+            return ""
+        lines = [
+            f"[dim italic]LEXIS >> Pattern confirmed -- {row.label}: {row.describe_value()}[/dim italic]"
+            for row in newly
+        ]
+        lines.append("[dim]:grammar shows the reconstructed rules.[/dim]")
+        return "\n" + "\n".join(lines)
+
     def _handle_hint(self, word: str):
         word = word.strip().lower()
         artifact = self.campaign.current_artifact
@@ -700,7 +720,12 @@ class XenoglossApp(App):
             self._show_message("No artifact selected.")
             return
         if not word:
-            self._show_message("Usage: :hint word")
+            self._show_message("Usage: :hint word   or   :hint -suffix")
+            return
+        if word.startswith("-") or word.endswith("-"):
+            rows = self.campaign.grammar_progress()
+            hint = grammar_discovery.grammar_hint(rows, self.campaign.codex, word)
+            self._show_message(f"[dim italic]LEXIS >> {hint}[/dim italic]")
             return
         if self._hint_in_progress:
             self._show_message("[dim]LEXIS is still processing. Please wait...[/dim]")

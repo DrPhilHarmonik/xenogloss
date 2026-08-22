@@ -6,6 +6,7 @@ from pathlib import Path
 from .language import Language
 from .codex import Codex
 from .artifacts import ArtifactCollection
+from . import grammar_discovery
 
 SAVES_DIR = Path(__file__).parent.parent / "data" / "saves"
 
@@ -19,6 +20,7 @@ class Campaign:
         codex: Codex = None,
         current_artifact_index: int = 0,
         created_at: str = None,
+        discovered_grammar: list[str] = None,
     ):
         self.campaign_id = campaign_id or uuid.uuid4().hex[:12]
         self.language = language or Language()
@@ -26,6 +28,9 @@ class Campaign:
         self.codex = codex or Codex()
         self.current_artifact_index = current_artifact_index
         self.created_at = created_at or datetime.now().isoformat()
+        # Rules the player has already been shown. Kept so that pruning a codex
+        # entry cannot un-teach a rule LEXIS has announced.
+        self.discovered_grammar: set[str] = set(discovered_grammar or [])
 
     @property
     def current_artifact(self):
@@ -52,6 +57,19 @@ class Campaign:
         """Call after any codex change to trigger artifact unlocks."""
         self.artifacts.check_unlocks(len(self.codex.entries))
 
+    def grammar_progress(self) -> list:
+        """Score every grammar rule against the evidence in the current codex."""
+        return grammar_discovery.analyze(
+            self.language, self.artifacts, self.codex, self.discovered_grammar
+        )
+
+    def refresh_grammar_discovery(self) -> list:
+        """Fold newly earned rules into the campaign; return the ones that just fired."""
+        rows = self.grammar_progress()
+        newly = [row for row in rows if row.discovered and row.rule not in self.discovered_grammar]
+        self.discovered_grammar.update(row.rule for row in newly)
+        return newly
+
     def save_path(self) -> Path:
         SAVES_DIR.mkdir(parents=True, exist_ok=True)
         return SAVES_DIR / f"{self.campaign_id}.json"
@@ -67,6 +85,7 @@ class Campaign:
             "language": self.language.to_dict(),
             "artifacts": self.artifacts.to_list(),
             "codex": self.codex.to_list(),
+            "discovered_grammar": sorted(self.discovered_grammar),
         }
         self.save_path().write_text(json.dumps(data, indent=2))
         # Keep a lightweight sidecar so list_saves doesn't need to parse the full file
@@ -93,6 +112,7 @@ class Campaign:
             codex=Codex.from_list(data["codex"]),
             current_artifact_index=data.get("current_artifact_index", 0),
             created_at=data.get("created_at", ""),
+            discovered_grammar=data.get("discovered_grammar", []),
         )
         # Backfill sidecar if it was created before this feature existed
         if not campaign.meta_path().exists():
