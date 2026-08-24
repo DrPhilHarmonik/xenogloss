@@ -8,9 +8,18 @@ The evidence for an affix rule is a *minimal pair* -- a base word and its
 inflected form, both already in the codex (``nur`` alongside ``nurn``). Three
 pairs and the rule resolves. Where the artifacts carry a word breakdown we only
 count pairs the breakdown actually attests, so a coincidental rhyme cannot
-unlock a rule the language never used. Syntax rules (word order, adjective
-position) resolve differently: they need whole sentences the player has glossed
-end to end, because that is what reading order off a text actually requires.
+unlock a rule the language never used.
+
+Some categories never leave a bare form behind. A verb in a composed artifact
+always carries a tense suffix, so the stem alone never reaches the codex and a
+base-vs-inflected pair for the tense rules is not merely rare, it is impossible.
+Those rules take *paradigm pairs* instead: one stem showing up under two
+different markings of the same category (``kelor`` beside ``kelet``) is evidence
+for both, which is also how the contrast is actually found in the field.
+
+Syntax rules (word order, adjective position) resolve differently again: they
+need whole sentences the player has glossed end to end, because that is what
+reading order off a text actually requires.
 
 Discovery is derived from codex + artifacts, so it needs no new save data; the
 campaign only remembers which rules have already fired so a `:forget` cannot
@@ -42,6 +51,20 @@ AFFIX_RULES = (
     ("negation_prefix", "Negation", "prefix", "negat"),
 )
 
+# Rules that contrast with one another on the same stem. Members of a group are
+# never all absent from a word: a verb carries exactly one tense marking, so the
+# only contrast available is against a sibling marking, not against a bare stem.
+PARADIGM_GROUPS = (
+    ("tense", ("past_suffix", "present_suffix", "future_suffix")),
+)
+
+_SIBLINGS = {
+    rule: tuple(other for other in group if other != rule)
+    for _name, group in PARADIGM_GROUPS
+    for rule in group
+}
+
+
 SYNTAX_RULES = (
     ("word_order", "Word order"),
     ("adjective_position", "Adjectives"),
@@ -59,6 +82,7 @@ class RuleProgress:
     discovered: bool = False
     unmarked: bool = False  # this language does not mark the category at all
     evidence: list = field(default_factory=list)
+    partners: list = field(default_factory=list)  # contrasting markers in the same category
     found: int = 0
     needed: int = 0
 
@@ -90,6 +114,19 @@ def _attested_forms(artifacts: list[Artifact]) -> tuple[dict[str, set[str]], boo
     return attested, saw_note
 
 
+def _strip(word: str, marker: str, kind: str) -> str | None:
+    """The stem left when `marker` is peeled off `word`, or None if it is not there."""
+    if not marker or len(word) <= len(marker):
+        return None
+    if kind == "prefix":
+        return word[len(marker):] if word.startswith(marker) else None
+    return word[: -len(marker)] if word.endswith(marker) else None
+
+
+def _attach(stem: str, marker: str, kind: str) -> str:
+    return marker + stem if kind == "prefix" else stem + marker
+
+
 def _minimal_pairs(words: set[str], marker: str, kind: str, allowed: set[str] | None) -> list[tuple[str, str]]:
     """Find (base, inflected) pairs in the codex that expose `marker`.
 
@@ -100,20 +137,57 @@ def _minimal_pairs(words: set[str], marker: str, kind: str, allowed: set[str] | 
         return []
     pairs = []
     for word in sorted(words):
-        if kind == "prefix":
-            if not word.startswith(marker) or len(word) <= len(marker):
-                continue
-            base = word[len(marker):]
-        else:
-            if not word.endswith(marker) or len(word) <= len(marker):
-                continue
-            base = word[: -len(marker)]
-        if base not in words:
+        base = _strip(word, marker, kind)
+        if base is None or base not in words:
             continue
         if allowed is not None and word not in allowed:
             continue
         pairs.append((base, word))
     return pairs
+
+
+def _paradigm_pairs(
+    words: set[str],
+    marker: str,
+    kind: str,
+    allowed: set[str] | None,
+    siblings: list[tuple[str, set[str] | None]],
+) -> list[tuple[str, str]]:
+    """Find (sibling form, inflected) pairs: one stem under two markings of a category.
+
+    This is the evidence for rules whose stem never stands bare. `siblings` is
+    the (marker, attested-forms) of the contrasting rules; a sibling's attested
+    set gates the partner the same way `allowed` gates the carrier.
+    """
+    if not marker or not siblings:
+        return []
+    pairs = []
+    for word in sorted(words):
+        stem = _strip(word, marker, kind)
+        if stem is None:
+            continue
+        if allowed is not None and word not in allowed:
+            continue
+        for sib_marker, sib_allowed in siblings:
+            if not sib_marker or sib_marker == marker:
+                continue
+            partner = _attach(stem, sib_marker, kind)
+            if partner == word or partner not in words:
+                continue
+            if sib_allowed is not None and partner not in sib_allowed:
+                continue
+            pairs.append((partner, word))
+            break
+    return pairs
+
+
+def _merge_pairs(*groups: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Combine evidence lists, counting each inflected form once."""
+    seen: dict[str, tuple[str, str]] = {}
+    for pairs in groups:
+        for partner, word in pairs:
+            seen.setdefault(word, (partner, word))
+    return [seen[word] for word in sorted(seen)]
 
 
 def glossed_sentences(artifacts: list[Artifact], codex: Codex) -> list[Artifact]:
@@ -143,20 +217,32 @@ def analyze(
 
     rows: list[RuleProgress] = []
 
+    markers = {
+        rule: _clean_affix(getattr(language.grammar, rule, "") or "").lower()
+        for rule, _, _, _ in AFFIX_RULES
+    }
+
+    def gate(rule: str) -> set[str] | None:
+        # Only trust the breakdown when it actually has something to say about
+        # this rule; otherwise an un-annotated campaign could never resolve it.
+        return attested[rule] if (saw_note and attested[rule]) else None
+
     for rule, label, kind, _keyword in AFFIX_RULES:
         raw = getattr(language.grammar, rule, "") or ""
-        marker = _clean_affix(raw).lower()
+        marker = markers[rule]
         row = RuleProgress(rule=rule, label=label, kind=kind, marker=marker, value=raw, needed=PAIRS_REQUIRED)
         if not marker:
             row.unmarked = True
             rows.append(row)
             continue
-        # Only trust the breakdown when it actually has something to say about
-        # this rule; otherwise an un-annotated campaign could never resolve it.
-        allowed = attested[rule] if (saw_note and attested[rule]) else None
-        pairs = _minimal_pairs(words, marker, kind, allowed)
-        row.evidence = pairs
-        row.found = len(pairs)
+        allowed = gate(rule)
+        siblings = [(markers[sib], gate(sib)) for sib in _SIBLINGS.get(rule, ())]
+        row.partners = [m for m, _ in siblings if m and m != marker]
+        row.evidence = _merge_pairs(
+            _minimal_pairs(words, marker, kind, allowed),
+            _paradigm_pairs(words, marker, kind, allowed, siblings),
+        )
+        row.found = len(row.evidence)
         row.discovered = row.found >= PAIRS_REQUIRED or rule in already_discovered
         rows.append(row)
 
@@ -258,29 +344,42 @@ def grammar_hint(rows: list[RuleProgress], codex: Codex, query: str) -> str:
     marker = row.marker
     unpaired = []
     for word in sorted(known):
-        if row.kind == "prefix":
-            if not word.startswith(marker) or len(word) <= len(marker):
-                continue
-            base = word[len(marker):]
-        else:
-            if not word.endswith(marker) or len(word) <= len(marker):
-                continue
-            base = word[: -len(marker)]
-        if base not in known:
-            unpaired.append(word)
+        stem = _strip(word, marker, row.kind)
+        if stem is None:
+            continue
+        if stem in known:
+            continue
+        if any(_attach(stem, other, row.kind) in known for other in row.partners):
+            continue
+        unpaired.append(word)
 
     remaining = row.needed - row.found
     if unpaired:
         listed = ", ".join(unpaired[:3])
+        if row.partners:
+            # Telling the player to strip a suffix off a stem that never stands
+            # alone would send them looking for a word that does not exist.
+            return (
+                f"You carry {len(unpaired)} record(s) ending in '{label}': {listed}. Those stems never "
+                f"stand bare, so the contrast you need is the same stem carrying a different ending -- "
+                f"{remaining} more such pair(s) and the rule resolves."
+            )
         return (
             f"You carry {len(unpaired)} record(s) built on '{label}' whose plain form you have not "
             f"logged: {listed}. Strip the affix and decode what is left -- {remaining} more pair(s) "
             "and the rule resolves."
         )
     if row.found:
+        verb = "stands" if row.found == 1 else "stand"
+        if row.partners:
+            evidence = f"{row.found} of your records {verb} against the same stem under a different ending"
+        else:
+            evidence = f"{row.found} of your records {verb} both with it and without"
+        return f"'{label}' holds up so far -- {evidence}. {remaining} more such pair(s) and the rule resolves."
+    if row.partners:
         return (
-            f"'{label}' holds up so far -- {row.found} of your records appear both with it and without. "
-            f"{remaining} more such pair(s) and the rule resolves."
+            f"'{label}' recurs, but nothing in your codex shows the same stem under a different ending. "
+            f"Find {remaining} such pair(s)."
         )
     return (
         f"'{label}' recurs, but your codex holds no word that both carries it and appears without it. "

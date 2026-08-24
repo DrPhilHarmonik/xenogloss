@@ -87,6 +87,17 @@ campaigns whose artifacts carry no notes fall back to plain surface matching so
 the rule stays reachable. Categories the language does not mark at all are
 labelled as such rather than dangling forever.
 
+Categories whose stem never stands bare take **paradigm pairs** instead. A verb
+in a composed artifact always carries a tense suffix, so the bare stem never
+reaches the codex and the three tense rules were unreachable as first shipped:
+against a 37-word lexicon and 160 artifacts, fully decoded, the ceiling for past,
+present, and future was 0 pairs each. They now resolve on the contrast between
+two markings of one stem (`kelor` beside `kelet`), which is evidence for both
+rules and is how the contrast is actually found in the field. Same attestation
+gating applies to both halves. `tests/test_grammar_discovery.py` measures the
+ceiling end to end against a generated corpus so a future generator change
+cannot quietly make a rule unwinnable again.
+
 Syntax rules (word order, adjective position) resolve on a different gate:
 two unlocked texts of three or more words that the player has glossed end to
 end -- which is what reading order off a text actually requires. Undiscovered
@@ -100,8 +111,10 @@ message bar the moment the entry that resolves them lands.
 ### Grammar hints from LEXIS (done)
 `:hint -or` / `:hint na-` route to an offline hinter instead of Ollama. It
 names codex words carrying the affix whose plain form is still unlogged, or
-counts how many more pairs are needed -- never the rule itself. An affix that
-belongs to no rule is dismissed as part of the word.
+counts how many more pairs are needed -- never the rule itself. For a rule in a
+paradigm group it asks for a contrasting form rather than telling the player to
+strip a suffix off a stem that never appears alone. An affix that belongs to no
+rule is dismissed as part of the word.
 
 ---
 

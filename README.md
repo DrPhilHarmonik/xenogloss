@@ -92,9 +92,15 @@ you have glossed two whole texts end to end. Until then the panel shows `???` an
 progress counter, so it tells you what to go looking for. If you see the same ending
 on several words, log the plain form too: that is what turns a hunch into a rule.
 
+**Some words never appear plain.** A verb always carries a tense, so there is no bare
+form of it to find. Those rules resolve on a contrast instead: the same stem under two
+different endings, `kelor` beside `kelet`. Logging both tells you what changed and what
+stayed, which is the whole trick.
+
 **`:hint -suffix` asks about a pattern.** `:hint -or` or `:hint na-` skips the AI and
 answers from your own records -- naming words that carry the affix whose plain form
-you have not logged yet. It never states the rule; it points at the evidence.
+you have not logged yet, or, for an ending that never comes off, the stems you should
+look for under a different ending. It never states the rule; it points at the evidence.
 
 **`:hint word` is your friend.** LEXIS is an in-character damaged translation AI that gives deliberately vague clues. It won't tell you the answer, but it can nudge you in the right direction. Use it when you're stuck on a specific word.
 

@@ -5,9 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from engine import grammar_discovery
+from engine.artifact_smith import generate_artifacts
 from engine.artifacts import Artifact, ArtifactCollection, WordBreakdown
 from engine.campaign import Campaign
 from engine.codex import Codex
+from engine.growth_language import GrowingLanguage, LexiconEntry
 from engine.language import GrammarRules, Language
 
 
@@ -53,6 +55,26 @@ def codex_with(*words) -> Codex:
     for word in words:
         codex.add(word, "meaning")
     return codex
+
+
+def tense_artifact() -> Artifact:
+    """One text attesting three stems, each under two different tense markings.
+
+    Verbs in a composed artifact always carry a tense suffix, so the bare stem
+    never appears and only this contrast can resolve the tense rules.
+    """
+    return make_artifact(
+        "t1",
+        "kelor kelet mithor mithet rasor raset",
+        breakdown=[
+            WordBreakdown("kelor", "to walk", "past tense (-or)"),
+            WordBreakdown("kelet", "to walk", "present tense (-et)"),
+            WordBreakdown("mithor", "to hold", "past tense (-or)"),
+            WordBreakdown("mithet", "to hold", "present tense (-et)"),
+            WordBreakdown("rasor", "to speak", "past tense (-or)"),
+            WordBreakdown("raset", "to speak", "present tense (-et)"),
+        ],
+    )
 
 
 def plural_artifact() -> Artifact:
@@ -203,6 +225,78 @@ class PanelRenderingTests(unittest.TestCase):
         self.assertIn("not marked in this language", panel)
 
 
+class ParadigmDiscoveryTests(unittest.TestCase):
+    """Rules whose stem never stands bare resolve on a contrast instead."""
+
+    def test_tense_resolves_on_contrasting_forms_of_one_stem(self):
+        artifacts = ArtifactCollection([tense_artifact()])
+        codex = codex_with("kelor", "kelet", "mithor", "mithet", "rasor", "raset")
+        rows = grammar_discovery.analyze(make_language(), artifacts, codex)
+
+        past = row_for(rows, "past_suffix")
+        present = row_for(rows, "present_suffix")
+        self.assertTrue(past.discovered)
+        self.assertTrue(present.discovered)
+        self.assertEqual(past.describe_value(), "add '-or'")
+        self.assertIn(("kelet", "kelor"), past.evidence)
+
+    def test_a_stem_seen_in_only_one_tense_is_not_evidence(self):
+        artifacts = ArtifactCollection([tense_artifact()])
+        codex = codex_with("kelor", "mithor", "rasor")
+        rows = grammar_discovery.analyze(make_language(), artifacts, codex)
+        self.assertEqual(row_for(rows, "past_suffix").found, 0)
+
+    def test_the_partner_form_must_be_attested_as_its_own_category(self):
+        # 'kelet' is present tense; 'mithet' is called nothing at all, so the
+        # stem contrast it would supply does not count.
+        artifacts = ArtifactCollection([
+            make_artifact(
+                "t2",
+                "kelor kelet mithor mithet",
+                breakdown=[
+                    WordBreakdown("kelor", "to walk", "past tense (-or)"),
+                    WordBreakdown("kelet", "to walk", "present tense (-et)"),
+                    WordBreakdown("mithor", "to hold", "past tense (-or)"),
+                    WordBreakdown("mithet", "to hold", ""),
+                ],
+            )
+        ])
+        codex = codex_with("kelor", "kelet", "mithor", "mithet")
+        rows = grammar_discovery.analyze(make_language(), artifacts, codex)
+        past = row_for(rows, "past_suffix")
+        self.assertEqual(past.found, 1)
+        self.assertNotIn(("mithet", "mithor"), past.evidence)
+
+    def test_plural_takes_no_paradigm_evidence(self):
+        # Plural has no contrasting sibling, so a bare base stays the only
+        # evidence for it. 'nurka' is possessive, not a second plural.
+        artifacts = ArtifactCollection([plural_artifact()])
+        codex = codex_with("nurn", "nurka")
+        rows = grammar_discovery.analyze(make_language(), artifacts, codex)
+        plural = row_for(rows, "plural_suffix")
+        self.assertEqual(plural.partners, [])
+        self.assertEqual(plural.found, 0)
+
+    def test_one_form_counts_once_even_with_two_kinds_of_evidence(self):
+        # 'kelor' has both a bare base and a contrasting present form present.
+        artifacts = ArtifactCollection([
+            make_artifact(
+                "t3",
+                "kel kelor kelet",
+                breakdown=[
+                    WordBreakdown("kel", "to walk", ""),
+                    WordBreakdown("kelor", "to walk", "past tense (-or)"),
+                    WordBreakdown("kelet", "to walk", "present tense (-et)"),
+                ],
+            )
+        ])
+        codex = codex_with("kel", "kelor", "kelet")
+        rows = grammar_discovery.analyze(make_language(), artifacts, codex)
+        past = row_for(rows, "past_suffix")
+        self.assertEqual(past.found, 1)
+        self.assertIn(("kel", "kelor"), past.evidence)
+
+
 class GrammarHintTests(unittest.TestCase):
     def setUp(self):
         self.artifacts = ArtifactCollection([plural_artifact()])
@@ -229,6 +323,25 @@ class GrammarHintTests(unittest.TestCase):
         self.assertIn("1 of your records", hint)
         self.assertIn("2 more", hint)
 
+    def test_hint_for_a_tense_rule_asks_for_a_contrast_not_a_bare_stem(self):
+        artifacts = ArtifactCollection([tense_artifact()])
+        codex = codex_with("kelor", "mithor")
+        rows = grammar_discovery.analyze(make_language(), artifacts, codex)
+        hint = grammar_discovery.grammar_hint(rows, codex, "-or")
+        self.assertIn("kelor", hint)
+        self.assertIn("different ending", hint)
+        self.assertNotIn("Strip the affix", hint)
+        self.assertNotIn("past", hint.lower())
+
+    def test_hint_counts_paradigm_progress_in_its_own_terms(self):
+        artifacts = ArtifactCollection([tense_artifact()])
+        codex = codex_with("kelor", "kelet")
+        rows = grammar_discovery.analyze(make_language(), artifacts, codex)
+        hint = grammar_discovery.grammar_hint(rows, codex, "-or")
+        self.assertIn("1 of your records stands", hint)
+        self.assertIn("different ending", hint)
+        self.assertNotIn("without", hint)
+
     def test_hint_dismisses_an_affix_that_is_not_a_rule(self):
         codex = codex_with("nur")
         hint = grammar_discovery.grammar_hint(self._rows(codex), codex, "-zz")
@@ -238,6 +351,67 @@ class GrammarHintTests(unittest.TestCase):
         codex = codex_with("nur")
         row = grammar_discovery.find_rule(self._rows(codex), "na-")
         self.assertEqual(row.rule, "negation_prefix")
+
+
+class EvidenceCeilingTests(unittest.TestCase):
+    """Every rule the language marks has to be reachable from a real corpus.
+
+    Phase 5 shipped with three rules that could never resolve: the smith always
+    suffixes a verb with a tense, so no bare stem ever reached the codex and the
+    past/present/future rows sat at 0 for any amount of play. This measures the
+    ceiling directly rather than trusting that the gate is satisfiable.
+    """
+
+    POS_COUNTS = (("noun", 14), ("verb", 10), ("adjective", 6), ("adverb", 4), ("pronoun", 3))
+    SYLLABLES = ("ta", "vok", "nur", "sor", "zur", "kel", "mith", "ras", "dun", "olv",
+                 "ith", "hae", "bru", "sen", "qal", "vex", "lom", "tir", "wen", "ash")
+
+    def _grown_language(self) -> GrowingLanguage:
+        grammar = GrammarRules(
+            word_order="Subject-Object-Verb",
+            plural_suffix="-n",
+            negation_prefix="na-",
+            past_suffix="-k",
+            present_suffix="-t",
+            future_suffix="-s",
+            adjective_position="before noun",
+            possessive_suffix="-r",
+        )
+        words, index = [], 0
+        for pos, count in self.POS_COUNTS:
+            for k in range(count):
+                stem = self.SYLLABLES[index % len(self.SYLLABLES)]
+                suffix = "" if index < len(self.SYLLABLES) else str(index // len(self.SYLLABLES))
+                words.append(LexiconEntry(alien=stem + suffix, english=f"{pos}{k}",
+                                          part_of_speech=pos, category="test"))
+                index += 1
+        return GrowingLanguage(language_name="Ceiling", species_name="Ceilings",
+                               grammar=grammar, words=words)
+
+    def test_every_marked_rule_is_reachable_from_a_generated_corpus(self):
+        language = self._grown_language()
+        artifacts = generate_artifacts(language, {1: 40, 2: 40, 3: 40, 4: 40}, seed=3)
+        for artifact in artifacts:
+            artifact.unlocked = True
+        collection = ArtifactCollection(artifacts)
+
+        # The best case a player can reach: every surface form in the corpus logged.
+        codex = Codex()
+        for artifact in artifacts:
+            for word in artifact.unique_words():
+                codex.add(word, "meaning")
+
+        rows = grammar_discovery.analyze(language, collection, codex)
+        for row in rows:
+            if row.unmarked:
+                continue
+            with self.subTest(rule=row.rule):
+                self.assertGreaterEqual(
+                    row.found, grammar_discovery.PAIRS_REQUIRED,
+                    f"{row.label} cannot be earned: only {row.found} piece(s) of evidence exist "
+                    "in a fully decoded corpus",
+                )
+                self.assertTrue(row.discovered)
 
 
 class CampaignGrammarStateTests(unittest.TestCase):
