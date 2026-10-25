@@ -6,8 +6,10 @@ from engine.growth_generator import (
     GrowthValidationError,
     _dedupe_words,
     _fit_to_count,
+    _inflected_entries,
     _min_multisyllabic,
     _missing_words_prompt,
+    _normalize_word,
     _prune_seed_batch,
     _repair_request_size,
     _repair_word_batch,
@@ -132,9 +134,52 @@ class SeedShapeRepairTests(unittest.TestCase):
             make_seed_word("timesh", "stone", "natural elements"),
         ]
 
-        pruned = _prune_seed_batch(words, expected_count=4)
+        pruned = _prune_seed_batch(words, expected_count=4, grammar={})
 
         self.assertEqual([word.alien for word in pruned], ["ka", "velora", "timesh"])
+
+    def test_inflected_entries_flags_tense_forms_from_real_seed(self):
+        # The Veylith seed from 2026-10-25: thir/kay tense forms passed validation.
+        grammar = {"past_suffix": "-or", "present_suffix": "-a", "future_suffix": "-el"}
+        words = [
+            make_seed_word("netha", "person", "body or person terms"),
+            make_seed_word("nethor", "home", "social words"),
+            make_seed_word("zeyth", "they", "pronouns", "pronoun"),
+            make_seed_word("zeythor", "north", "spatial words"),
+            make_seed_word("meyra", "moon", "natural elements"),
+            make_seed_word("meyrael", "month", "time words"),
+            make_seed_word("thir", "come", "common verbs", "verb"),
+            make_seed_word("thoril", "build", "common verbs", "verb"),
+            make_seed_word("kayel", "sail", "common verbs", "verb"),
+            make_seed_word("thiror", "came", "common verbs", "verb"),
+            make_seed_word("thira", "comes", "common verbs", "verb"),
+            make_seed_word("thirel", "will come", "common verbs", "verb"),
+            make_seed_word("kayra", "sails", "common verbs", "verb"),
+            make_seed_word("kayor", "sailed", "common verbs", "verb"),
+        ]
+
+        flagged = [word.alien for word in _inflected_entries(words, grammar)]
+
+        self.assertEqual(flagged, ["thiror", "thira", "thirel", "kayra", "kayor"])
+
+    def test_prune_seed_batch_drops_tense_forms(self):
+        grammar = {"past_suffix": "-or", "present_suffix": "-a", "future_suffix": "-el"}
+        words = [
+            make_seed_word("thir", "come", "common verbs", "verb"),
+            make_seed_word("thiror", "came", "common verbs", "verb"),
+            make_seed_word("velora", "water", "natural elements"),
+        ]
+
+        pruned = _prune_seed_batch(words, expected_count=3, grammar=grammar)
+
+        self.assertEqual([word.alien for word in pruned], ["thir", "velora"])
+
+    def test_normalize_word_strips_infinitive_to(self):
+        word = _normalize_word({"alien": "kayel", "english": "To Sail", "part_of_speech": "verb"}, created_on="2026-04-15", source="seed")
+        noun = _normalize_word({"alien": "tovan", "english": "to-do", "part_of_speech": "noun"}, created_on="2026-04-15", source="seed")
+
+        self.assertEqual(word.english, "sail")
+        self.assertEqual(noun.english, "to-do")
 
     def test_trim_short_roots_leaves_valid_sets_alone(self):
         words = [

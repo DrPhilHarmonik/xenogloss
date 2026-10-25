@@ -63,11 +63,14 @@ def _normalize_word(item: dict, created_on: str, source: str) -> LexiconEntry | 
     english = item.get("english", "").strip().lower()
     if not alien or not english:
         return None
+    part_of_speech = item.get("part_of_speech", "").strip().lower()
+    if part_of_speech == "verb" and english.startswith("to "):
+        english = english[3:].strip()
 
     return LexiconEntry(
         alien=alien,
         english=english,
-        part_of_speech=item.get("part_of_speech", "").strip().lower(),
+        part_of_speech=part_of_speech,
         category=item.get("category", "").strip().lower(),
         notes=item.get("notes", "").strip(),
         example_alien=item.get("example_alien", "").strip(),
@@ -136,7 +139,7 @@ def _looks_like_calque_or_inflection(gloss: str) -> bool:
         return True
     if "(" in lowered or ")" in lowered:
         return True
-    if lowered.startswith("not "):
+    if lowered.startswith(("not ", "will ", "shall ", "did ")):
         return True
     if any(marker in lowered for marker in ("past tense", "present tense", "future tense")):
         return True
@@ -389,9 +392,48 @@ def _trim_short_roots(words: list[LexiconEntry], expected_count: int) -> list[Le
     return kept
 
 
-def _prune_seed_batch(words: list[LexiconEntry], expected_count: int) -> list[LexiconEntry]:
+def _inflected_entries(words: list[LexiconEntry], grammar: dict) -> list[LexiconEntry]:
+    """Verbs that are tense forms of an earlier verb (thir/thira/thiror) rather than new lexemes.
+
+    Limited to verbs: the suffixes are often a single vowel, so nouns like netha/nethor
+    share a "stem" by accident far more often than by derivation.
+    """
+    suffixes = [
+        str(grammar.get(key, "")).strip().lstrip("-").lower()
+        for key in ("past_suffix", "present_suffix", "future_suffix")
+    ]
+    suffixes = [suffix for suffix in suffixes if suffix]
+
+    def stems(alien: str) -> set[str]:
+        found = {alien}
+        for suffix in suffixes:
+            if alien.endswith(suffix) and len(alien) - len(suffix) >= 2:
+                found.add(alien[: -len(suffix)])
+        return found
+
+    def english_forms(gloss: str) -> set[str]:
+        return {gloss, gloss + "s", gloss + "es", gloss + "d", gloss + "ed", gloss + "ing"}
+
+    inflected = []
+    seen_stems: set[str] = set()
+    seen_forms: set[str] = set()
+    for word in words:
+        if word.part_of_speech != "verb":
+            continue
+        word_stems = stems(word.alien)
+        if word_stems & seen_stems or word.english in seen_forms:
+            inflected.append(word)
+            continue
+        seen_stems |= word_stems
+        seen_forms |= english_forms(word.english)
+    return inflected
+
+
+def _prune_seed_batch(words: list[LexiconEntry], expected_count: int, grammar: dict) -> list[LexiconEntry]:
     """Remove entries the seed validator would reject so repair can replace them instead of regenerating."""
     words = [word for word in words if not _looks_like_calque_or_inflection(word.english)]
+    inflected = _inflected_entries(words, grammar)
+    words = [word for word in words if not any(word is other for other in inflected)]
     return _trim_short_roots(words, expected_count)
 
 
@@ -421,6 +463,13 @@ def _validate_seed_language_shape(data: dict, words: list[LexiconEntry], expecte
         raise GrowthValidationError(
             "Invalid seed language: glosses should be core lexemes, not phrases or inflections: "
             + ", ".join(bad_glosses[:6])
+        )
+
+    inflected = _inflected_entries(words, data.get("grammar", {}))
+    if inflected:
+        raise GrowthValidationError(
+            "Invalid seed language: tense forms listed as separate words: "
+            + ", ".join(f"{word.alien} ({word.english})" for word in inflected[:6])
         )
 
     if expected_count >= 12:
@@ -740,7 +789,7 @@ def _generate_seed_payload(
                 progress_cb=progress_cb,
                 model=model,
                 timeout=timeout,
-                trim_fn=lambda batch: _prune_seed_batch(batch, seed_word_count),
+                trim_fn=lambda batch: _prune_seed_batch(batch, seed_word_count, data.get("grammar", {})),
                 requirements_fn=lambda batch: _seed_shape_gaps(batch, seed_word_count),
             )
             data["seed_words"] = [word.to_dict() for word in words]

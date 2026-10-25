@@ -359,6 +359,27 @@ class GrowthGeneratorTests(unittest.TestCase):
         with self.assertRaisesRegex(GrowthValidationError, "core lexemes"):
             _validate_seed_language_shape(data, words, expected_count=len(words))
 
+    def test_validate_seed_language_rejects_tense_forms_as_words(self):
+        words = [
+            LexiconEntry(alien="thir", english="come", part_of_speech="verb", category="common verbs"),
+            LexiconEntry(alien="thiror", english="came", part_of_speech="verb", category="common verbs"),
+            LexiconEntry(alien="velora", english="water", part_of_speech="noun", category="natural elements"),
+            LexiconEntry(alien="timesh", english="stone", part_of_speech="noun", category="natural elements"),
+        ]
+        data = {
+            "grammar": {
+                "plural_suffix": "-en",
+                "negation_prefix": "ka-",
+                "past_suffix": "-or",
+                "present_suffix": "-a",
+                "future_suffix": "-el",
+                "possessive_suffix": "-thi",
+            }
+        }
+
+        with self.assertRaisesRegex(GrowthValidationError, r"tense forms listed as separate words: thiror \(came\)"):
+            _validate_seed_language_shape(data, words, expected_count=len(words))
+
     def test_validate_seed_language_rejects_too_many_ultra_short_forms(self):
         words = [
             LexiconEntry(alien="na", english="i", part_of_speech="pronoun", category="pronouns"),
