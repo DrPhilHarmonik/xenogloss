@@ -389,6 +389,12 @@ def _trim_short_roots(words: list[LexiconEntry], expected_count: int) -> list[Le
     return kept
 
 
+def _prune_seed_batch(words: list[LexiconEntry], expected_count: int) -> list[LexiconEntry]:
+    """Remove entries the seed validator would reject so repair can replace them instead of regenerating."""
+    words = [word for word in words if not _looks_like_calque_or_inflection(word.english)]
+    return _trim_short_roots(words, expected_count)
+
+
 def _validate_seed_language_shape(data: dict, words: list[LexiconEntry], expected_count: int) -> None:
     if len(words) != expected_count:
         raise GrowthValidationError(f"Invalid seed language: expected {expected_count} unique entries, got {len(words)}")
@@ -522,7 +528,7 @@ def _missing_words_prompt(
     return (
         f"{base_prompt}\n\n"
         "Your previous response contained some valid entries and some duplicates or invalid items.\n"
-        f"Keep the language profile exactly consistent and return only the missing {count} {item_name}.\n"
+        f"Keep the language profile exactly consistent and return {count} new {item_name}.\n"
         "Do not repeat any previously accepted entry.\n"
         f"Already accepted {schema_name} entries:\n{existing_snapshot}\n\n"
         f"{requirement_text}"
@@ -541,6 +547,24 @@ def _missing_words_prompt(
         "  ]\n"
         "}\n"
     )
+
+
+def _repair_request_size(missing: int) -> int:
+    """Ask for extras: repair batches routinely lose entries to duplicates and trimming."""
+    return missing + max(2, math.ceil(missing / 2))
+
+
+def _fit_to_count(words: list[LexiconEntry], expected_count: int, requirements_fn=None) -> list[LexiconEntry]:
+    """Drop surplus entries from the end, skipping any whose removal would open a new requirement gap."""
+    kept = list(words)
+    for word in reversed(words):
+        if len(kept) <= expected_count:
+            break
+        trial = [other for other in kept if other is not word]
+        if requirements_fn and requirements_fn(trial) != requirements_fn(kept):
+            continue
+        kept = trial
+    return kept[:expected_count]
 
 
 def _repair_word_batch(
@@ -569,10 +593,10 @@ def _repair_word_batch(
     if trim_fn:
         repaired = trim_fn(repaired)
     if len(repaired) >= expected_count:
-        return repaired[:expected_count]
+        return _fit_to_count(repaired, expected_count, requirements_fn)
 
     current_prompt = _missing_words_prompt(
-        count=expected_count - len(repaired),
+        count=_repair_request_size(expected_count - len(repaired)),
         existing_words=repaired,
         schema_name=schema_name,
         list_key=list_key,
@@ -604,10 +628,10 @@ def _repair_word_batch(
         if trim_fn:
             repaired = trim_fn(repaired)
         if len(repaired) >= expected_count:
-            return repaired[:expected_count]
+            return _fit_to_count(repaired, expected_count, requirements_fn)
 
         current_prompt = _missing_words_prompt(
-            count=expected_count - len(repaired),
+            count=_repair_request_size(expected_count - len(repaired)),
             existing_words=repaired,
             schema_name=schema_name,
             list_key=list_key,
@@ -716,7 +740,7 @@ def _generate_seed_payload(
                 progress_cb=progress_cb,
                 model=model,
                 timeout=timeout,
-                trim_fn=lambda batch: _trim_short_roots(batch, seed_word_count),
+                trim_fn=lambda batch: _prune_seed_batch(batch, seed_word_count),
                 requirements_fn=lambda batch: _seed_shape_gaps(batch, seed_word_count),
             )
             data["seed_words"] = [word.to_dict() for word in words]

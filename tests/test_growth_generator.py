@@ -3,9 +3,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from engine.growth_generator import (
+    GrowthValidationError,
     _dedupe_words,
+    _fit_to_count,
     _min_multisyllabic,
     _missing_words_prompt,
+    _prune_seed_batch,
+    _repair_request_size,
     _repair_word_batch,
     _seed_shape_gaps,
     _trim_short_roots,
@@ -120,6 +124,18 @@ class SeedShapeRepairTests(unittest.TestCase):
         self.assertIn("vek", aliens)
         self.assertIn("rin", aliens)
 
+    def test_prune_seed_batch_drops_calque_glosses(self):
+        words = [
+            make_seed_word("ka", "i", "pronouns", "pronoun"),
+            make_seed_word("velora", "water", "natural elements"),
+            make_seed_word("nasoru", "not speak", "common verbs", "verb"),
+            make_seed_word("timesh", "stone", "natural elements"),
+        ]
+
+        pruned = _prune_seed_batch(words, expected_count=4)
+
+        self.assertEqual([word.alien for word in pruned], ["ka", "velora", "timesh"])
+
     def test_trim_short_roots_leaves_valid_sets_alone(self):
         words = [
             make_seed_word("ka", "i", "pronouns", "pronoun"),
@@ -174,6 +190,42 @@ class SeedShapeRepairTests(unittest.TestCase):
             )
 
         self.assertIn("- at least 1 words of 2-3 syllables", generate.call_args.args[0])
+
+    def test_repair_requests_extra_entries(self):
+        self.assertEqual(_repair_request_size(1), 3)
+        self.assertEqual(_repair_request_size(10), 15)
+
+        with patch("engine.growth_generator._generate_structured_json", return_value={"seed_words": []}) as generate:
+            with self.assertRaises(GrowthValidationError):
+                _repair_word_batch(
+                    prompt="seed prompt",
+                    schema_name="seed language",
+                    list_key="seed_words",
+                    expected_count=4,
+                    candidates=[make_word("lor", "person")],
+                    created_on="2026-04-15",
+                    source="seed",
+                    retries=0,
+                )
+
+        self.assertIn("return 5 new seed_words", generate.call_args.args[0])
+
+    def test_fit_to_count_keeps_entries_that_close_gaps(self):
+        words = [
+            make_seed_word("ka", "i", "pronouns", "pronoun"),
+            make_seed_word("velora", "water", "natural elements"),
+            make_seed_word("sorun", "river", "natural elements"),
+            make_seed_word("tu", "you", "pronouns", "pronoun"),
+            make_seed_word("mirav", "stone", "natural elements"),
+        ]
+
+        def requirements(batch):
+            pronouns = sum(1 for word in batch if word.part_of_speech == "pronoun")
+            return [] if pronouns >= 2 else ["at least 2 pronouns"]
+
+        fitted = _fit_to_count(words, expected_count=3, requirements_fn=requirements)
+
+        self.assertEqual([word.alien for word in fitted], ["ka", "velora", "tu"])
 
 
 if __name__ == "__main__":
