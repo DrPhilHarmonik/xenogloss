@@ -183,9 +183,17 @@ class GrowthGeneratorTests(unittest.TestCase):
             ],
         }
 
+        # Surplus short roots are trimmed and repaired first; the English grammar still forces a full retry.
+        repair_payload = {
+            "seed_words": [
+                {"alien": "sefani", "english": "river", "part_of_speech": "noun", "category": "nature"},
+                {"alien": "omeru", "english": "walk", "part_of_speech": "verb", "category": "common verbs"},
+            ]
+        }
+
         with patch("engine.growth_generator.preflight_ollama"), patch(
             "engine.growth_generator._ollama",
-            side_effect=[json.dumps(invalid_payload), json.dumps(valid_payload)],
+            side_effect=[json.dumps(invalid_payload), json.dumps(repair_payload), json.dumps(valid_payload)],
         ):
             language = generate_seed_language(seed_word_count=5, candidate_count=1)
 

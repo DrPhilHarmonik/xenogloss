@@ -259,6 +259,7 @@ def _generate_structured_json(
             progress_cb=progress_cb,
             temperature=0.2,
             timeout=timeout,
+            json_mode=True,
         )
         try:
             return _extract_json(raw)
@@ -322,14 +323,78 @@ def _validate_candidate_words(
     return unique_words
 
 
+SEED_REQUIRED_CATEGORIES = (
+    "pronouns",
+    "body_person",
+    "common_verbs",
+    "natural_elements",
+    "social_words",
+    "spatial_words",
+    "time_words",
+    "numbers",
+)
+
+
+def _min_multisyllabic(expected_count: int) -> int:
+    minimum = min(max(1, math.ceil(expected_count * 0.4)), expected_count)
+    if expected_count >= 12:
+        minimum = max(minimum, math.ceil(expected_count * 0.55))
+    return minimum
+
+
+def _seed_shape_gaps(words: list[LexiconEntry], expected_count: int) -> list[str]:
+    """Seed-shape shortfalls that adding words can still fix, phrased for the model."""
+    gaps = []
+    multisyllabic = sum(1 for word in words if _count_syllables(word.alien) >= 2)
+    if multisyllabic < _min_multisyllabic(expected_count):
+        gaps.append(f"at least {_min_multisyllabic(expected_count) - multisyllabic} words of 2-3 syllables")
+    if expected_count < 12:
+        return gaps
+
+    counts_by_category: dict[str, int] = {}
+    for word in words:
+        key = _category_key(word.category)
+        counts_by_category[key] = counts_by_category.get(key, 0) + 1
+    for key in SEED_REQUIRED_CATEGORIES:
+        needed = (2 if key in ("pronouns", "numbers") else 1) - counts_by_category.get(key, 0)
+        if needed > 0:
+            gaps.append(f"at least {needed} word(s) with category \"{key.replace('_', ' ')}\"")
+    verbs = sum(1 for word in words if word.part_of_speech == "verb")
+    min_verbs = max(3, math.ceil(expected_count * 0.15))
+    if verbs < min_verbs:
+        gaps.append(f"at least {min_verbs - verbs} more verb(s)")
+    return gaps
+
+
+def _trim_short_roots(words: list[LexiconEntry], expected_count: int) -> list[LexiconEntry]:
+    """Drop surplus one-syllable words so a repair batch has room to meet the syllable quota."""
+    kept = list(words)
+    multisyllabic = sum(1 for word in kept if _count_syllables(word.alien) >= 2)
+    shortfall = _min_multisyllabic(expected_count) - multisyllabic
+
+    for word in reversed(words):
+        if shortfall <= expected_count - len(kept):
+            break
+        if _count_syllables(word.alien) >= 2:
+            continue
+        key = _category_key(word.category)
+        # Pronouns and numbers are naturally short; keep them, and keep each category's last word.
+        if key in ("pronouns", "numbers"):
+            continue
+        if key in SEED_REQUIRED_CATEGORIES and sum(1 for other in kept if _category_key(other.category) == key) <= 1:
+            continue
+        if sum(1 for other in kept if _count_syllables(other.alien) == 1) <= 1:
+            break
+        kept.remove(word)
+    return kept
+
+
 def _validate_seed_language_shape(data: dict, words: list[LexiconEntry], expected_count: int) -> None:
     if len(words) != expected_count:
         raise GrowthValidationError(f"Invalid seed language: expected {expected_count} unique entries, got {len(words)}")
 
     multisyllabic = sum(1 for word in words if _count_syllables(word.alien) >= 2)
-    min_multisyllabic = min(max(1, math.ceil(expected_count * 0.4)), expected_count)
-    if expected_count >= 12:
-        min_multisyllabic = max(min_multisyllabic, math.ceil(expected_count * 0.55))
+    min_multisyllabic = _min_multisyllabic(expected_count)
     if multisyllabic < min_multisyllabic:
         raise GrowthValidationError(
             f"Invalid seed language: too many short roots; need at least {min_multisyllabic} multisyllabic words, got {multisyllabic}"
@@ -358,17 +423,7 @@ def _validate_seed_language_shape(data: dict, words: list[LexiconEntry], expecte
             key = _category_key(word.category)
             counts_by_category[key] = counts_by_category.get(key, 0) + 1
 
-        required_categories = (
-            "pronouns",
-            "body_person",
-            "common_verbs",
-            "natural_elements",
-            "social_words",
-            "spatial_words",
-            "time_words",
-            "numbers",
-        )
-        missing_categories = [key for key in required_categories if counts_by_category.get(key, 0) == 0]
+        missing_categories = [key for key in SEED_REQUIRED_CATEGORIES if counts_by_category.get(key, 0) == 0]
         if missing_categories:
             raise GrowthValidationError(
                 "Invalid seed language: missing semantic coverage for "
@@ -442,6 +497,7 @@ def _missing_words_prompt(
     schema_name: str,
     list_key: str,
     base_prompt: str,
+    requirements: list[str] | None = None,
 ) -> str:
     existing_snapshot = json.dumps(
         [
@@ -456,12 +512,20 @@ def _missing_words_prompt(
         indent=2,
     )
     item_name = "seed_words" if list_key == "seed_words" else "new_words"
+    requirement_text = ""
+    if requirements:
+        requirement_text = (
+            f"The {count} new entries must together include:\n"
+            + "".join(f"- {item}\n" for item in requirements)
+            + "\n"
+        )
     return (
         f"{base_prompt}\n\n"
         "Your previous response contained some valid entries and some duplicates or invalid items.\n"
         f"Keep the language profile exactly consistent and return only the missing {count} {item_name}.\n"
         "Do not repeat any previously accepted entry.\n"
         f"Already accepted {schema_name} entries:\n{existing_snapshot}\n\n"
+        f"{requirement_text}"
         "Return valid JSON only using this exact schema:\n"
         "{\n"
         f'  "{list_key}": [\n'
@@ -494,12 +558,16 @@ def _repair_word_batch(
     model: str = LANGUAGE_MODEL,
     timeout: int = 300,
     retries: int = 2,
+    trim_fn=None,
+    requirements_fn=None,
 ) -> list[LexiconEntry]:
     repaired = _dedupe_words(
         candidates,
         existing_alien=existing_alien,
         existing_english=existing_english,
     )
+    if trim_fn:
+        repaired = trim_fn(repaired)
     if len(repaired) >= expected_count:
         return repaired[:expected_count]
 
@@ -509,6 +577,7 @@ def _repair_word_batch(
         schema_name=schema_name,
         list_key=list_key,
         base_prompt=prompt,
+        requirements=requirements_fn(repaired) if requirements_fn else None,
     )
 
     for attempt in range(retries + 1):
@@ -532,6 +601,8 @@ def _repair_word_batch(
             existing_alien=existing_alien,
             existing_english=existing_english,
         )
+        if trim_fn:
+            repaired = trim_fn(repaired)
         if len(repaired) >= expected_count:
             return repaired[:expected_count]
 
@@ -541,6 +612,7 @@ def _repair_word_batch(
             schema_name=schema_name,
             list_key=list_key,
             base_prompt=prompt,
+            requirements=requirements_fn(repaired) if requirements_fn else None,
         )
 
     raise GrowthValidationError(
@@ -644,6 +716,8 @@ def _generate_seed_payload(
                 progress_cb=progress_cb,
                 model=model,
                 timeout=timeout,
+                trim_fn=lambda batch: _trim_short_roots(batch, seed_word_count),
+                requirements_fn=lambda batch: _seed_shape_gaps(batch, seed_word_count),
             )
             data["seed_words"] = [word.to_dict() for word in words]
             words = _validate_candidate_words(
@@ -684,6 +758,7 @@ def generate_seed_language(
     base_prompt = (
         _load_prompt("growth_init.txt")
         .replace("{SEED_WORD_COUNT}", str(seed_word_count))
+        .replace("{MIN_MULTISYLLABIC}", str(_min_multisyllabic(seed_word_count)))
         .replace("{GROWTH_WORDS_PER_DAY}", str(growth_words_per_day))
         .replace("{TARGET_LEXICON_SIZE}", str(target_lexicon_size))
     )

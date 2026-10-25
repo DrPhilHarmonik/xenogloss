@@ -1,7 +1,15 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from engine.growth_generator import _dedupe_words, _repair_word_batch
+from engine.growth_generator import (
+    _dedupe_words,
+    _min_multisyllabic,
+    _missing_words_prompt,
+    _repair_word_batch,
+    _seed_shape_gaps,
+    _trim_short_roots,
+)
 from engine.growth_language import LexiconEntry
 
 
@@ -71,6 +79,101 @@ class GrowthRepairTests(unittest.TestCase):
             )
 
         self.assertEqual([(word.alien, word.english) for word in repaired], [("lor", "person"), ("vau", "water"), ("rai", "eat")])
+
+
+def make_seed_word(alien: str, english: str, category: str, part_of_speech: str = "noun") -> LexiconEntry:
+    return LexiconEntry(
+        alien=alien,
+        english=english,
+        part_of_speech=part_of_speech,
+        category=category,
+        created_on="2026-04-15",
+        source="seed",
+    )
+
+
+class SeedShapeRepairTests(unittest.TestCase):
+    def test_seed_prompt_quota_matches_validator(self):
+        prompt = Path(__file__).parent.parent / "prompts" / "growth_init.txt"
+        self.assertIn("At least {MIN_MULTISYLLABIC} of the {SEED_WORD_COUNT}", prompt.read_text())
+        self.assertEqual(_min_multisyllabic(24), 14)
+        self.assertEqual(_min_multisyllabic(5), 2)
+
+    def test_trim_short_roots_makes_room_for_quota(self):
+        words = [
+            make_seed_word("ka", "i", "pronouns", "pronoun"),
+            make_seed_word("tu", "you", "pronouns", "pronoun"),
+            make_seed_word("vek", "water", "natural elements"),
+            make_seed_word("sol", "stone", "natural elements"),
+            make_seed_word("rin", "hand", "body"),
+            make_seed_word("mek", "foot", "body"),
+            make_seed_word("dal", "fire", "natural elements"),
+            make_seed_word("pom", "cup", "tools"),
+        ]
+
+        kept = _trim_short_roots(words, expected_count=8)
+
+        aliens = [word.alien for word in kept]
+        self.assertEqual(8 - len(kept), _min_multisyllabic(8))
+        self.assertIn("ka", aliens)
+        self.assertIn("tu", aliens)
+        self.assertIn("vek", aliens)
+        self.assertIn("rin", aliens)
+
+    def test_trim_short_roots_leaves_valid_sets_alone(self):
+        words = [
+            make_seed_word("ka", "i", "pronouns", "pronoun"),
+            make_seed_word("velora", "water", "natural elements"),
+            make_seed_word("timesh", "stone", "natural elements"),
+        ]
+
+        self.assertEqual(_trim_short_roots(words, expected_count=3), words)
+
+    def test_seed_shape_gaps_lists_missing_requirements(self):
+        words = [
+            make_seed_word("ka", "i", "pronouns", "pronoun"),
+            make_seed_word("vek", "water", "natural elements"),
+            make_seed_word("sorun", "eat", "common verbs", "verb"),
+        ]
+
+        gaps = _seed_shape_gaps(words, expected_count=24)
+
+        self.assertIn("at least 13 words of 2-3 syllables", gaps)
+        self.assertIn('at least 1 word(s) with category "pronouns"', gaps)
+        self.assertIn('at least 2 word(s) with category "numbers"', gaps)
+        self.assertIn("at least 3 more verb(s)", gaps)
+        self.assertFalse(any("natural elements" in gap for gap in gaps))
+
+    def test_missing_words_prompt_includes_requirements(self):
+        prompt = _missing_words_prompt(
+            count=4,
+            existing_words=[make_seed_word("ka", "i", "pronouns", "pronoun")],
+            schema_name="seed language",
+            list_key="seed_words",
+            base_prompt="seed prompt",
+            requirements=["at least 2 words of 2-3 syllables"],
+        )
+
+        self.assertIn("The 4 new entries must together include:\n- at least 2 words of 2-3 syllables", prompt)
+
+    def test_repair_word_batch_passes_requirements_to_prompt(self):
+        initial = [make_word("lor", "person")]
+        repair_payload = {"seed_words": [{"alien": "velora", "english": "water", "part_of_speech": "noun", "category": "test"}]}
+
+        with patch("engine.growth_generator._generate_structured_json", return_value=repair_payload) as generate:
+            _repair_word_batch(
+                prompt="seed prompt",
+                schema_name="seed language",
+                list_key="seed_words",
+                expected_count=2,
+                candidates=initial,
+                created_on="2026-04-15",
+                source="seed",
+                retries=0,
+                requirements_fn=lambda batch: ["at least 1 words of 2-3 syllables"],
+            )
+
+        self.assertIn("- at least 1 words of 2-3 syllables", generate.call_args.args[0])
 
 
 if __name__ == "__main__":

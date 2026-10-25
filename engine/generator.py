@@ -16,6 +16,11 @@ OLLAMA_URL = os.environ.get("XENOGLOSS_OLLAMA_URL", "http://localhost:11434/api/
 LANGUAGE_MODEL = os.environ.get("XENOGLOSS_LANGUAGE_MODEL", "qwen2.5:14b")
 HINT_MODEL = os.environ.get("XENOGLOSS_HINT_MODEL", "llama3.1:8b-instruct-q4_K_M")
 OLLAMA_REQUEST_TIMEOUT = int(os.environ.get("XENOGLOSS_OLLAMA_TIMEOUT", "300"))
+# Ollama defaults to a 4096-token window, which a seed prompt plus a 24-word
+# lexicon can overflow; generation then wanders off and never closes the JSON.
+OLLAMA_NUM_CTX = int(os.environ.get("XENOGLOSS_OLLAMA_NUM_CTX", "8192"))
+# Hard cap on generated tokens so a runaway response fails in minutes, not hours.
+OLLAMA_NUM_PREDICT = int(os.environ.get("XENOGLOSS_OLLAMA_NUM_PREDICT", "4096"))
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
@@ -101,14 +106,23 @@ def _ollama(
     retries: int = 2,
     temperature: float = 0.7,
     timeout: int = OLLAMA_REQUEST_TIMEOUT,
+    json_mode: bool = False,
 ) -> str:
     """Call Ollama and return the full response text. Streams internally."""
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": True,
-        "options": {"temperature": temperature},
+        # Thinking models (qwen3) otherwise reason for hundreds of tokens per call.
+        "think": False,
+        "options": {
+            "temperature": temperature,
+            "num_ctx": OLLAMA_NUM_CTX,
+            "num_predict": OLLAMA_NUM_PREDICT,
+        },
     }
+    if json_mode:
+        payload["format"] = "json"
     last_exc = None
     for attempt in range(retries + 1):
         try:
@@ -123,6 +137,8 @@ def _ollama(
                 parts.append(token)
                 if progress_cb and token:
                     progress_cb(token)
+                if chunk.get("done") and chunk.get("done_reason") == "length" and progress_cb:
+                    progress_cb(f"\n[response hit the {OLLAMA_NUM_PREDICT}-token limit and was cut off]\n")
             return "".join(parts)
         except (requests.RequestException, json.JSONDecodeError) as exc:
             last_exc = exc

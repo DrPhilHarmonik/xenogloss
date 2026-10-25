@@ -63,7 +63,7 @@ Every English gloss should be a core lexeme, not an inflected explanation like "
 No alien word may appear more than once in the seed list.
 Do not assign multiple meanings to the same alien form.
 Do not assign multiple alien forms to the same English gloss.
-At least 40% of the seed words must be 2-3 syllables long.
+At least {MIN_MULTISYLLABIC} of the {SEED_WORD_COUNT} seed words must be 2-3 syllables long.
 Do not make nearly all words one syllable.
 Mix short roots with fuller everyday words so the language feels natural.
 Do not build most of the lexicon from one or two repeated roots such as many `lor-` / `zor-` variants.
