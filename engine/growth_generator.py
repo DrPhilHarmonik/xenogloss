@@ -369,7 +369,7 @@ def _seed_shape_gaps(words: list[LexiconEntry], expected_count: int) -> list[str
     return gaps
 
 
-def _trim_short_roots(words: list[LexiconEntry], expected_count: int) -> list[LexiconEntry]:
+def _trim_short_roots(words: list[LexiconEntry], expected_count: int, on_drop=None) -> list[LexiconEntry]:
     """Drop surplus one-syllable words so a repair batch has room to meet the syllable quota."""
     kept = list(words)
     multisyllabic = sum(1 for word in kept if _count_syllables(word.alien) >= 2)
@@ -389,10 +389,16 @@ def _trim_short_roots(words: list[LexiconEntry], expected_count: int) -> list[Le
         if sum(1 for other in kept if _count_syllables(other.alien) == 1) <= 1:
             break
         kept.remove(word)
+        if on_drop:
+            on_drop(word, f"surplus one-syllable root (making room for {shortfall} more multisyllabic words)")
     return kept
 
 
 def _inflected_entries(words: list[LexiconEntry], grammar: dict) -> list[LexiconEntry]:
+    return [word for word, _base in _inflected_pairs(words, grammar)]
+
+
+def _inflected_pairs(words: list[LexiconEntry], grammar: dict) -> list[tuple[LexiconEntry, LexiconEntry]]:
     """Verbs that are tense forms of an earlier verb (thir/thira/thiror) rather than new lexemes.
 
     Limited to verbs: the suffixes are often a single vowel, so nouns like netha/nethor
@@ -415,26 +421,38 @@ def _inflected_entries(words: list[LexiconEntry], grammar: dict) -> list[Lexicon
         return {gloss, gloss + "s", gloss + "es", gloss + "d", gloss + "ed", gloss + "ing"}
 
     inflected = []
-    seen_stems: set[str] = set()
-    seen_forms: set[str] = set()
+    stem_owner: dict[str, LexiconEntry] = {}
+    form_owner: dict[str, LexiconEntry] = {}
     for word in words:
         if word.part_of_speech != "verb":
             continue
         word_stems = stems(word.alien)
-        if word_stems & seen_stems or word.english in seen_forms:
-            inflected.append(word)
+        base = next((stem_owner[stem] for stem in word_stems if stem in stem_owner), None) or form_owner.get(word.english)
+        if base:
+            inflected.append((word, base))
             continue
-        seen_stems |= word_stems
-        seen_forms |= english_forms(word.english)
+        for stem in word_stems:
+            stem_owner[stem] = word
+        for form in english_forms(word.english):
+            form_owner[form] = word
     return inflected
 
 
-def _prune_seed_batch(words: list[LexiconEntry], expected_count: int, grammar: dict) -> list[LexiconEntry]:
+def _prune_seed_batch(words: list[LexiconEntry], expected_count: int, grammar: dict, on_drop=None) -> list[LexiconEntry]:
     """Remove entries the seed validator would reject so repair can replace them instead of regenerating."""
-    words = [word for word in words if not _looks_like_calque_or_inflection(word.english)]
-    inflected = _inflected_entries(words, grammar)
-    words = [word for word in words if not any(word is other for other in inflected)]
-    return _trim_short_roots(words, expected_count)
+    kept = []
+    for word in words:
+        if _looks_like_calque_or_inflection(word.english):
+            if on_drop:
+                on_drop(word, "gloss is a phrase or inflection, not a core lexeme")
+            continue
+        kept.append(word)
+    inflected = _inflected_pairs(kept, grammar)
+    for word, base in inflected:
+        if on_drop:
+            on_drop(word, f"tense form of {base.alien} ({base.english})")
+    kept = [word for word in kept if not any(word is other for other, _base in inflected)]
+    return _trim_short_roots(kept, expected_count, on_drop=on_drop)
 
 
 def _validate_seed_language_shape(data: dict, words: list[LexiconEntry], expected_count: int) -> None:
@@ -529,18 +547,24 @@ def _dedupe_words(
     *,
     existing_alien: set[str] | None = None,
     existing_english: set[str] | None = None,
+    on_drop=None,
 ) -> list[LexiconEntry]:
     """Keep the first valid occurrence of each alien form and English gloss."""
-    seen_alien = set(existing_alien or set())
-    seen_english = set(existing_english or set())
+    seen_alien = {alien: "the existing lexicon" for alien in existing_alien or set()}
+    seen_english = {english: "the existing lexicon" for english in existing_english or set()}
     unique_words: list[LexiconEntry] = []
 
     for word in words:
         if word.alien in seen_alien or word.english in seen_english:
+            if on_drop:
+                if word.alien in seen_alien:
+                    on_drop(word, f'alien form already used by {seen_alien[word.alien]}')
+                else:
+                    on_drop(word, f'gloss already used by {seen_english[word.english]}')
             continue
         unique_words.append(word)
-        seen_alien.add(word.alien)
-        seen_english.add(word.english)
+        seen_alien[word.alien] = f"{word.alien} ({word.english})"
+        seen_english[word.english] = f"{word.alien} ({word.english})"
 
     return unique_words
 
@@ -603,7 +627,7 @@ def _repair_request_size(missing: int) -> int:
     return missing + max(2, math.ceil(missing / 2))
 
 
-def _fit_to_count(words: list[LexiconEntry], expected_count: int, requirements_fn=None) -> list[LexiconEntry]:
+def _fit_to_count(words: list[LexiconEntry], expected_count: int, requirements_fn=None, on_drop=None) -> list[LexiconEntry]:
     """Drop surplus entries from the end, skipping any whose removal would open a new requirement gap."""
     kept = list(words)
     for word in reversed(words):
@@ -613,6 +637,11 @@ def _fit_to_count(words: list[LexiconEntry], expected_count: int, requirements_f
         if requirements_fn and requirements_fn(trial) != requirements_fn(kept):
             continue
         kept = trial
+        if on_drop:
+            on_drop(word, "surplus entry")
+    if on_drop:
+        for word in kept[expected_count:]:
+            on_drop(word, "surplus entry")
     return kept[:expected_count]
 
 
@@ -634,15 +663,20 @@ def _repair_word_batch(
     trim_fn=None,
     requirements_fn=None,
 ) -> list[LexiconEntry]:
+    def report_drop(word: LexiconEntry, reason: str) -> None:
+        if progress_cb:
+            progress_cb(f"\n[dropped {word.alien} ({word.english}): {reason}]\n")
+
     repaired = _dedupe_words(
         candidates,
         existing_alien=existing_alien,
         existing_english=existing_english,
+        on_drop=report_drop,
     )
     if trim_fn:
-        repaired = trim_fn(repaired)
+        repaired = trim_fn(repaired, report_drop)
     if len(repaired) >= expected_count:
-        return _fit_to_count(repaired, expected_count, requirements_fn)
+        return _fit_to_count(repaired, expected_count, requirements_fn, on_drop=report_drop)
 
     current_prompt = _missing_words_prompt(
         count=_repair_request_size(expected_count - len(repaired)),
@@ -669,15 +703,22 @@ def _repair_word_batch(
             timeout=timeout,
         )
         new_candidates = _normalize_words_from_data(data, list_key=list_key, created_on=created_on, source=source)
+        if progress_cb:
+            returned = data.get(list_key, [])
+            progress_cb(
+                f"\n[repair batch returned {len(returned) if isinstance(returned, list) else 0} entries,"
+                f" {len(new_candidates)} well-formed]\n"
+            )
         repaired = _dedupe_words(
             repaired + new_candidates,
             existing_alien=existing_alien,
             existing_english=existing_english,
+            on_drop=report_drop,
         )
         if trim_fn:
-            repaired = trim_fn(repaired)
+            repaired = trim_fn(repaired, report_drop)
         if len(repaired) >= expected_count:
-            return _fit_to_count(repaired, expected_count, requirements_fn)
+            return _fit_to_count(repaired, expected_count, requirements_fn, on_drop=report_drop)
 
         current_prompt = _missing_words_prompt(
             count=_repair_request_size(expected_count - len(repaired)),
@@ -789,7 +830,7 @@ def _generate_seed_payload(
                 progress_cb=progress_cb,
                 model=model,
                 timeout=timeout,
-                trim_fn=lambda batch: _prune_seed_batch(batch, seed_word_count, data.get("grammar", {})),
+                trim_fn=lambda batch, on_drop: _prune_seed_batch(batch, seed_word_count, data.get("grammar", {}), on_drop=on_drop),
                 requirements_fn=lambda batch: _seed_shape_gaps(batch, seed_word_count),
             )
             data["seed_words"] = [word.to_dict() for word in words]

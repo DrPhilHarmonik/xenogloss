@@ -174,6 +174,54 @@ class SeedShapeRepairTests(unittest.TestCase):
 
         self.assertEqual([word.alien for word in pruned], ["thir", "velora"])
 
+    def test_prune_seed_batch_reports_drop_reasons(self):
+        grammar = {"past_suffix": "-or", "present_suffix": "-a", "future_suffix": "-el"}
+        words = [
+            make_seed_word("thir", "come", "common verbs", "verb"),
+            make_seed_word("thiror", "came", "common verbs", "verb"),
+            make_seed_word("nasoru", "not speak", "common verbs", "verb"),
+            make_seed_word("velora", "water", "natural elements"),
+        ]
+        drops = []
+
+        _prune_seed_batch(words, expected_count=4, grammar=grammar, on_drop=lambda word, reason: drops.append((word.alien, reason)))
+
+        self.assertEqual(
+            drops,
+            [
+                ("nasoru", "gloss is a phrase or inflection, not a core lexeme"),
+                ("thiror", "tense form of thir (come)"),
+            ],
+        )
+
+    def test_repair_word_batch_logs_dropped_entries(self):
+        repair_payload = {
+            "seed_words": [
+                {"alien": "sor", "english": "person", "part_of_speech": "noun", "category": "test"},
+                {"alien": "lor", "english": "fire", "part_of_speech": "noun", "category": "test"},
+                {"alien": "velora", "english": "water", "part_of_speech": "noun", "category": "test"},
+            ]
+        }
+        messages = []
+
+        with patch("engine.growth_generator._generate_structured_json", return_value=repair_payload):
+            _repair_word_batch(
+                prompt="seed prompt",
+                schema_name="seed language",
+                list_key="seed_words",
+                expected_count=2,
+                candidates=[make_word("lor", "person")],
+                created_on="2026-04-15",
+                source="seed",
+                retries=0,
+                progress_cb=messages.append,
+            )
+
+        lines = [message.strip() for message in messages]
+        self.assertIn("[repair batch returned 3 entries, 3 well-formed]", lines)
+        self.assertIn("[dropped sor (person): gloss already used by lor (person)]", lines)
+        self.assertIn("[dropped lor (fire): alien form already used by lor (person)]", lines)
+
     def test_normalize_word_strips_infinitive_to(self):
         word = _normalize_word({"alien": "kayel", "english": "To Sail", "part_of_speech": "verb"}, created_on="2026-04-15", source="seed")
         noun = _normalize_word({"alien": "tovan", "english": "to-do", "part_of_speech": "noun"}, created_on="2026-04-15", source="seed")
