@@ -18,6 +18,11 @@ GROWTH_MODEL = os.environ.get("XENOGLOSS_GROWTH_MODEL", LANGUAGE_MODEL)
 SEED_TIMEOUT = int(os.environ.get("XENOGLOSS_SEED_TIMEOUT", os.environ.get("XENOGLOSS_OLLAMA_TIMEOUT", "900")))
 GROWTH_TIMEOUT = int(os.environ.get("XENOGLOSS_GROWTH_TIMEOUT", os.environ.get("XENOGLOSS_OLLAMA_TIMEOUT", "300")))
 SEED_CANDIDATE_COUNT = int(os.environ.get("XENOGLOSS_SEED_CANDIDATES", "3"))
+# Qwen's recommended non-thinking sampling. Lower temperatures made qwen3 repeat the
+# word list until it hit the token cap.
+STRUCTURED_TEMPERATURE = float(os.environ.get("XENOGLOSS_STRUCTURED_TEMPERATURE", "0.7"))
+STRUCTURED_TOP_P = float(os.environ.get("XENOGLOSS_STRUCTURED_TOP_P", "0.8"))
+STRUCTURED_TOP_K = int(os.environ.get("XENOGLOSS_STRUCTURED_TOP_K", "20"))
 
 SEED_ARCHETYPES = (
     {
@@ -141,6 +146,8 @@ def _looks_like_calque_or_inflection(gloss: str) -> bool:
         return True
     if lowered.startswith(("not ", "will ", "shall ", "did ")):
         return True
+    if lowered.startswith(("my ", "your ", "his ", "her ", "its ", "our ", "their ")):
+        return True
     if any(marker in lowered for marker in ("past tense", "present tense", "future tense")):
         return True
     if any(marker in lowered for marker in ("plural of ", "negative of ", "form of ")):
@@ -260,7 +267,9 @@ def _generate_structured_json(
             current_prompt,
             model=model,
             progress_cb=progress_cb,
-            temperature=0.2,
+            temperature=STRUCTURED_TEMPERATURE,
+            top_p=STRUCTURED_TOP_P,
+            top_k=STRUCTURED_TOP_K,
             timeout=timeout,
             json_mode=True,
         )
@@ -351,22 +360,81 @@ def _seed_shape_gaps(words: list[LexiconEntry], expected_count: int) -> list[str
     multisyllabic = sum(1 for word in words if _count_syllables(word.alien) >= 2)
     if multisyllabic < _min_multisyllabic(expected_count):
         gaps.append(f"at least {_min_multisyllabic(expected_count) - multisyllabic} words of 2-3 syllables")
-    if expected_count < 12:
-        return gaps
+    for key, needed in _seed_category_needs(words, expected_count).items():
+        if key == "verb":
+            gaps.append(f"at least {needed} more verb(s)")
+        else:
+            gaps.append(f"at least {needed} word(s) with category \"{key.replace('_', ' ')}\"")
+    return gaps
 
+
+def _category_minimum(key: str) -> int:
+    return 2 if key in ("pronouns", "numbers") else 1
+
+
+def _seed_category_needs(words: list[LexiconEntry], expected_count: int) -> dict[str, int]:
+    """Words still missing per required category, plus "verb" for the verb quota."""
+    if expected_count < 12:
+        return {}
     counts_by_category: dict[str, int] = {}
     for word in words:
         key = _category_key(word.category)
         counts_by_category[key] = counts_by_category.get(key, 0) + 1
+    needs = {}
     for key in SEED_REQUIRED_CATEGORIES:
-        needed = (2 if key in ("pronouns", "numbers") else 1) - counts_by_category.get(key, 0)
+        needed = _category_minimum(key) - counts_by_category.get(key, 0)
         if needed > 0:
-            gaps.append(f"at least {needed} word(s) with category \"{key.replace('_', ' ')}\"")
+            needs[key] = needed
     verbs = sum(1 for word in words if word.part_of_speech == "verb")
     min_verbs = max(3, math.ceil(expected_count * 0.15))
     if verbs < min_verbs:
-        gaps.append(f"at least {min_verbs - verbs} more verb(s)")
-    return gaps
+        needs["verb"] = min_verbs - verbs
+    return needs
+
+
+def _make_room_for_categories(words: list[LexiconEntry], expected_count: int, on_drop=None) -> list[LexiconEntry]:
+    """Drop words from crowded categories so a full-but-lopsided seed can still be repaired.
+
+    Without this, 24 words with no pronouns counts as finished and the whole seed
+    is thrown away by the validator.
+    """
+    kept = list(words)
+    needs = _seed_category_needs(kept, expected_count)
+    if not needs:
+        return kept
+    # Verbs usually fill the common_verbs gap too, so count the larger of the two once.
+    needed = sum(count for key, count in needs.items() if key not in ("verb", "common_verbs"))
+    needed += max(needs.get("verb", 0), needs.get("common_verbs", 0))
+    missing = ", ".join(key.replace("_", " ") for key in needs)
+
+    while expected_count - len(kept) < needed:
+        counts: dict[str, int] = {}
+        for word in kept:
+            key = _category_key(word.category)
+            counts[key] = counts.get(key, 0) + 1
+
+        def removable(word: LexiconEntry) -> bool:
+            key = _category_key(word.category)
+            if "verb" in needs and word.part_of_speech == "verb":
+                return False
+            return key not in SEED_REQUIRED_CATEGORIES or counts[key] > _category_minimum(key)
+
+        candidates = [word for word in reversed(kept) if removable(word)]
+        if not candidates:
+            break
+        # Prefer uncategorized words, then the most crowded category, then short roots.
+        victim = max(
+            candidates,
+            key=lambda word: (
+                _category_key(word.category) == "other",
+                counts[_category_key(word.category)],
+                _count_syllables(word.alien) == 1,
+            ),
+        )
+        kept = [word for word in kept if word is not victim]
+        if on_drop:
+            on_drop(victim, f"surplus {victim.category or 'uncategorized'} word (making room for {missing})")
+    return kept
 
 
 def _trim_short_roots(words: list[LexiconEntry], expected_count: int, on_drop=None) -> list[LexiconEntry]:
@@ -399,11 +467,47 @@ def _inflected_entries(words: list[LexiconEntry], grammar: dict) -> list[Lexicon
 
 
 def _inflected_pairs(words: list[LexiconEntry], grammar: dict) -> list[tuple[LexiconEntry, LexiconEntry]]:
-    """Verbs that are tense forms of an earlier verb (thir/thira/thiror) rather than new lexemes.
+    """Entries that are inflected forms of another entry rather than new lexemes.
 
-    Limited to verbs: the suffixes are often a single vowel, so nouns like netha/nethor
-    share a "stem" by accident far more often than by derivation.
+    Verbs: tense forms of an earlier verb (thir/thira/thiror), matched on the alien stem
+    or the English gloss. Nouns: plurals (neya/neyen, "wave"/"waves"), which must match
+    on both sides, because the suffixes are often a single vowel and nouns like
+    netha/nethor (person/home) share a "stem" by accident far more often than by derivation.
     """
+    pairs = _inflected_verb_pairs(words, grammar) + _plural_noun_pairs(words, grammar)
+    order = {id(word): index for index, word in enumerate(words)}
+    return sorted(pairs, key=lambda pair: order[id(pair[0])])
+
+
+def _plural_noun_pairs(words: list[LexiconEntry], grammar: dict) -> list[tuple[LexiconEntry, LexiconEntry]]:
+    suffix = str(grammar.get("plural_suffix", "")).strip().lstrip("-").lower()
+    if not suffix:
+        return []
+    nouns_by_alien: dict[str, LexiconEntry] = {}
+    for word in words:
+        if word.part_of_speech == "noun":
+            nouns_by_alien.setdefault(word.alien, word)
+            # A final vowel often elides before a vowel-initial suffix: neya + -en -> neyen.
+            if word.alien[-1:] in "aeiou" and suffix[:1] in "aeiou":
+                nouns_by_alien.setdefault(word.alien[:-1], word)
+
+    def english_plurals(gloss: str) -> set[str]:
+        plurals = {gloss + "s", gloss + "es"}
+        if gloss.endswith("y"):
+            plurals.add(gloss[:-1] + "ies")
+        return plurals
+
+    pairs = []
+    for word in words:
+        if word.part_of_speech != "noun" or not word.alien.endswith(suffix):
+            continue
+        base = nouns_by_alien.get(word.alien[: -len(suffix)])
+        if base and base is not word and word.english in english_plurals(base.english):
+            pairs.append((word, base))
+    return pairs
+
+
+def _inflected_verb_pairs(words: list[LexiconEntry], grammar: dict) -> list[tuple[LexiconEntry, LexiconEntry]]:
     suffixes = [
         str(grammar.get(key, "")).strip().lstrip("-").lower()
         for key in ("past_suffix", "present_suffix", "future_suffix")
@@ -450,9 +554,10 @@ def _prune_seed_batch(words: list[LexiconEntry], expected_count: int, grammar: d
     inflected = _inflected_pairs(kept, grammar)
     for word, base in inflected:
         if on_drop:
-            on_drop(word, f"tense form of {base.alien} ({base.english})")
+            on_drop(word, f"inflected form of {base.alien} ({base.english})")
     kept = [word for word in kept if not any(word is other for other, _base in inflected)]
-    return _trim_short_roots(kept, expected_count, on_drop=on_drop)
+    kept = _trim_short_roots(kept, expected_count, on_drop=on_drop)
+    return _make_room_for_categories(kept, expected_count, on_drop=on_drop)
 
 
 def _validate_seed_language_shape(data: dict, words: list[LexiconEntry], expected_count: int) -> None:
@@ -486,7 +591,7 @@ def _validate_seed_language_shape(data: dict, words: list[LexiconEntry], expecte
     inflected = _inflected_entries(words, data.get("grammar", {}))
     if inflected:
         raise GrowthValidationError(
-            "Invalid seed language: tense forms listed as separate words: "
+            "Invalid seed language: inflected forms listed as separate words: "
             + ", ".join(f"{word.alien} ({word.english})" for word in inflected[:6])
         )
 

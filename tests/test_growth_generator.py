@@ -7,6 +7,7 @@ from engine.growth_generator import (
     _dedupe_words,
     _fit_to_count,
     _inflected_entries,
+    _make_room_for_categories,
     _min_multisyllabic,
     _missing_words_prompt,
     _normalize_word,
@@ -190,7 +191,7 @@ class SeedShapeRepairTests(unittest.TestCase):
             drops,
             [
                 ("nasoru", "gloss is a phrase or inflection, not a core lexeme"),
-                ("thiror", "tense form of thir (come)"),
+                ("thiror", "inflected form of thir (come)"),
             ],
         )
 
@@ -221,6 +222,60 @@ class SeedShapeRepairTests(unittest.TestCase):
         self.assertIn("[repair batch returned 3 entries, 3 well-formed]", lines)
         self.assertIn("[dropped sor (person): gloss already used by lor (person)]", lines)
         self.assertIn("[dropped lor (fire): alien form already used by lor (person)]", lines)
+
+    def test_inflected_entries_flags_noun_plurals_only_when_both_sides_match(self):
+        # From the 2026-10-25 run: neyen (waves) and zeyren (skies) were listed as words.
+        grammar = {"plural_suffix": "-en", "past_suffix": "-or", "present_suffix": "-a", "future_suffix": "-el"}
+        words = [
+            make_seed_word("neya", "wave", "natural elements"),
+            make_seed_word("zeyr", "sky", "natural elements"),
+            make_seed_word("neyen", "waves", "natural elements"),
+            make_seed_word("zeyren", "skies", "natural elements"),
+            make_seed_word("neth", "person", "body or person terms"),
+            make_seed_word("nethen", "tribe", "social words"),
+        ]
+
+        flagged = [word.alien for word in _inflected_entries(words, grammar)]
+
+        self.assertEqual(flagged, ["neyen", "zeyren"])
+
+    def test_possessive_phrase_glosses_are_dropped(self):
+        words = [
+            make_seed_word("tovil", "water", "natural elements"),
+            make_seed_word("tovilthi", "your water", "natural elements"),
+        ]
+
+        pruned = _prune_seed_batch(words, expected_count=2, grammar={})
+
+        self.assertEqual([word.alien for word in pruned], ["tovil"])
+
+    def test_make_room_for_categories_opens_slots_for_missing_pronouns(self):
+        # 24 words with no pronouns used to count as finished and fail validation.
+        words = [
+            make_seed_word("thir", "come", "common verbs", "verb"),
+            make_seed_word("thoril", "build", "common verbs", "verb"),
+            make_seed_word("kayel", "sail", "common verbs", "verb"),
+            make_seed_word("velor", "carry", "common verbs", "verb"),
+            make_seed_word("netha", "person", "body or person terms"),
+            make_seed_word("nethor", "home", "social words"),
+            make_seed_word("zeythor", "north", "spatial words"),
+            make_seed_word("meyrael", "month", "time words"),
+            make_seed_word("thelra", "three", "numbers", "number"),
+            make_seed_word("vayrel", "two", "numbers", "number"),
+        ] + [make_seed_word(f"vela{chr(97 + index)}", f"thing{index}", "natural elements") for index in range(14)]
+        drops = []
+
+        kept = _make_room_for_categories(words, expected_count=24, on_drop=lambda word, reason: drops.append(reason))
+
+        self.assertEqual(len(kept), 22)
+        self.assertTrue(all(word.category == "natural elements" for word in words if word not in kept))
+        self.assertEqual(drops[0], "surplus natural elements word (making room for pronouns)")
+        self.assertEqual(sum(1 for word in kept if word.part_of_speech == "number"), 2)
+
+    def test_make_room_for_categories_leaves_complete_sets_alone(self):
+        words = [make_seed_word("velora", "water", "natural elements")]
+
+        self.assertEqual(_make_room_for_categories(words, expected_count=4), words)
 
     def test_normalize_word_strips_infinitive_to(self):
         word = _normalize_word({"alien": "kayel", "english": "To Sail", "part_of_speech": "verb"}, created_on="2026-04-15", source="seed")

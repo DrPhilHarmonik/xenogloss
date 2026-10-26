@@ -377,7 +377,7 @@ class GrowthGeneratorTests(unittest.TestCase):
             }
         }
 
-        with self.assertRaisesRegex(GrowthValidationError, r"tense forms listed as separate words: thiror \(came\)"):
+        with self.assertRaisesRegex(GrowthValidationError, r"inflected forms listed as separate words: thiror \(came\)"):
             _validate_seed_language_shape(data, words, expected_count=len(words))
 
     def test_validate_seed_language_rejects_too_many_ultra_short_forms(self):

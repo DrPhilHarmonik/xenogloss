@@ -107,6 +107,8 @@ def _ollama(
     temperature: float = 0.7,
     timeout: int = OLLAMA_REQUEST_TIMEOUT,
     json_mode: bool = False,
+    top_p: float | None = None,
+    top_k: int | None = None,
 ) -> str:
     """Call Ollama and return the full response text. Streams internally."""
     payload = {
@@ -121,6 +123,10 @@ def _ollama(
             "num_predict": OLLAMA_NUM_PREDICT,
         },
     }
+    if top_p is not None:
+        payload["options"]["top_p"] = top_p
+    if top_k is not None:
+        payload["options"]["top_k"] = top_k
     if json_mode:
         payload["format"] = "json"
     last_exc = None

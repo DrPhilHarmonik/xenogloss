@@ -61,7 +61,7 @@ Every alien word must be lowercase and single-token.
 Every English gloss must be distinct.
 Every English gloss should be a core lexeme, not an inflected explanation like "eat (past tense)" or "not eat food".
 Give verb glosses as bare verbs ("build", not "to build").
-Do not list tense forms as separate words ("comes", "came", "will come"); the grammar suffixes produce those.
+Do not list inflected forms as separate words: no tense forms ("comes", "came", "will come"), plurals ("waves"), or possessives ("your water"); the grammar suffixes produce those.
 No alien word may appear more than once in the seed list.
 Do not assign multiple meanings to the same alien form.
 Do not assign multiple alien forms to the same English gloss.
